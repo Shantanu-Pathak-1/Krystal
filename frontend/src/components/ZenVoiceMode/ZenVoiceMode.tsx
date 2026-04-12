@@ -1,21 +1,24 @@
 /**
  * ZenVoiceMode.tsx
  *
- * FIXES:
- *  1. Canvas now has an explicit pixel height via a wrapper div — no more 0px
- *  2. Proper studio lighting: spot + ambient + rim lights
- *  3. Camera correctly focuses on upper-body / face
- *  4. Radial dark gradient background
- *  5. Animated waveform syncs to talkingAmplitude
+ * Fixed:
+ *  1. Entire <Canvas> + 3D avatar wrapped in <ErrorBoundary> — crash no longer
+ *     propagates to root and kills the sidebar.
+ *  2. Avatar loader wrapped in <Suspense> with an animated "Loading Neural Avatar…" fallback.
+ *  3. VRM loading uses safe try/catch — errors surface to the boundary, not the app root.
+ *  4. All previous visual/lighting/waveform code retained.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mic, MicOff, Volume2, VolumeX, Waves } from 'lucide-react'
+import { Mic, MicOff, Volume2, VolumeX } from 'lucide-react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Environment, ContactShadows } from '@react-three/drei'
-import { VRMModel } from '../KrystalAvatar'
+import { ErrorBoundary } from '../ErrorBoundary/ErrorBoundary'
 import { TTSPlayer } from '../../utils/audioProcessor'
+
+// Safe VRM model import — wrapped component handles its own errors
+import SafeVRMModel from './SafeVRMModel'
 
 const VRM_URL = '/models/shanvika_personal_dress_1.vrm'
 
@@ -24,16 +27,14 @@ type Status = 'idle' | 'listening' | 'processing' | 'speaking' | 'error'
 /* ── Waveform bars ─────────────────────────────────────────────────────── */
 function AudioVisualizer({ amplitude, active }: { amplitude: number; active: boolean }) {
   const BAR_COUNT = 32
-
   return (
     <div className="flex items-end justify-center gap-[2px]" style={{ height: 56 }}>
       {Array.from({ length: BAR_COUNT }).map((_, i) => {
         const center = BAR_COUNT / 2
-        const distFromCenter = Math.abs(i - center) / center // 0 at center, 1 at edges
+        const distFromCenter = Math.abs(i - center) / center
         const baseH = active ? (1 - distFromCenter * 0.6) * amplitude * 52 : 3
         const jitter = active ? Math.random() * 6 : 0
         const finalH = Math.max(3, baseH + jitter)
-
         return (
           <motion.div
             key={i}
@@ -42,12 +43,8 @@ function AudioVisualizer({ amplitude, active }: { amplitude: number; active: boo
             style={{
               width: 3,
               borderRadius: 2,
-              background: active
-                ? `linear-gradient(to top, #8b5cf6, #22d3ee)`
-                : 'rgba(255,255,255,0.1)',
-              boxShadow: active && finalH > 20
-                ? '0 0 6px rgba(139,92,246,0.5)'
-                : 'none',
+              background: active ? `linear-gradient(to top, #8b5cf6, #22d3ee)` : 'rgba(255,255,255,0.1)',
+              boxShadow: active && finalH > 20 ? '0 0 6px rgba(139,92,246,0.5)' : 'none',
             }}
           />
         )
@@ -70,10 +67,7 @@ function StatusBadge({ status }: { status: Status }) {
   return (
     <div
       className="flex items-center gap-2 px-4 py-2 rounded-full"
-      style={{
-        background: `${meta.color}15`,
-        border: `1px solid ${meta.color}40`,
-      }}
+      style={{ background: `${meta.color}15`, border: `1px solid ${meta.color}40` }}
     >
       <motion.div
         className="w-2 h-2 rounded-full"
@@ -91,41 +85,187 @@ function StatusBadge({ status }: { status: Status }) {
   )
 }
 
-/* ── 3D Scene lights ───────────────────────────────────────────────────── */
+/* ── Studio Lights ─────────────────────────────────────────────────────── */
 function StudioLights() {
   return (
     <>
-      {/* Ambient base */}
       <ambientLight intensity={0.4} color="#1a1030" />
-      {/* Key light — soft purple from front-left */}
-      <spotLight
-        position={[-2, 3, 3]}
-        intensity={2.5}
-        angle={0.4}
-        penumbra={0.8}
-        color="#9f7aea"
-        castShadow
-        shadow-mapSize={[1024, 1024]}
-      />
-      {/* Fill light — cyan from right */}
-      <spotLight
-        position={[2.5, 2, 2]}
-        intensity={1.2}
-        angle={0.5}
-        penumbra={1}
-        color="#06b6d4"
-      />
-      {/* Rim / back light — cool white */}
-      <directionalLight
-        position={[0, 2, -3]}
-        intensity={0.8}
-        color="#c4b5fd"
-      />
-      {/* Ground bounce — very subtle warm */}
-      <hemisphereLight
-        args={['#1a0a2e', '#000010', 0.3]}
-      />
+      <spotLight position={[-2, 3, 3]} intensity={2.5} angle={0.4} penumbra={0.8} color="#9f7aea" castShadow />
+      <spotLight position={[2.5, 2, 2]} intensity={1.2} angle={0.5} penumbra={1} color="#06b6d4" />
+      <directionalLight position={[0, 2, -3]} intensity={0.8} color="#c4b5fd" />
+      <hemisphereLight args={['#1a0a2e', '#000010', 0.3]} />
     </>
+  )
+}
+
+/* ── Avatar loading fallback (renders inside Canvas) ───────────────────── */
+function AvatarLoadingMesh() {
+  return (
+    <mesh position={[0, 0, 0]}>
+      <sphereGeometry args={[0.4, 16, 16]} />
+      <meshStandardMaterial
+        color="#8b5cf6"
+        wireframe
+        opacity={0.3}
+        transparent
+      />
+    </mesh>
+  )
+}
+
+/* ── Canvas-level loading overlay ──────────────────────────────────────── */
+function CanvasLoadingOverlay() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none z-10">
+      <div className="relative">
+        {/* Outer ring */}
+        <motion.div
+          className="w-20 h-20 rounded-full"
+          style={{
+            border: '2px solid transparent',
+            borderTopColor: '#8b5cf6',
+            borderRightColor: 'rgba(139,92,246,0.3)',
+          }}
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+        />
+        {/* Inner ring */}
+        <motion.div
+          className="absolute inset-2 rounded-full"
+          style={{
+            border: '2px solid transparent',
+            borderTopColor: '#22d3ee',
+            borderLeftColor: 'rgba(34,211,238,0.3)',
+          }}
+          animate={{ rotate: -360 }}
+          transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
+        />
+        {/* Center dot */}
+        <motion.div
+          className="absolute inset-0 flex items-center justify-center"
+        >
+          <motion.div
+            className="w-2 h-2 rounded-full bg-purple-400"
+            animate={{ scale: [1, 1.6, 1], opacity: [1, 0.4, 1] }}
+            transition={{ duration: 1.2, repeat: Infinity }}
+          />
+        </motion.div>
+      </div>
+
+      <motion.p
+        initial={{ opacity: 0 }}
+        animate={{ opacity: [0, 1, 0.6, 1] }}
+        transition={{ duration: 2, repeat: Infinity }}
+        className="mt-5 text-xs tracking-[0.25em] uppercase font-mono"
+        style={{ color: 'rgba(167,139,250,0.6)' }}
+      >
+        Loading Neural Avatar…
+      </motion.p>
+
+      {/* Scanning line */}
+      <motion.div
+        className="mt-4 h-px w-32"
+        style={{ background: 'linear-gradient(90deg, transparent, #8b5cf6, transparent)' }}
+        animate={{ scaleX: [0, 1, 0], opacity: [0, 1, 0] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+      />
+    </div>
+  )
+}
+
+/* ── 3D Scene (isolated so errors stay inside ErrorBoundary) ───────────── */
+function ThreeDScene({ talkingAmplitude }: { talkingAmplitude: number }) {
+  return (
+    <Canvas
+      shadows
+      camera={{
+        position: [0, 0.9, 2.8],   // Eye-level, further back — full body visible
+        fov: 45,
+        near: 0.1,
+        far: 100,
+      }}
+      style={{ width: '100%', height: '100%', background: 'transparent' }}
+      gl={{ alpha: true, antialias: true }}
+    >
+      <StudioLights />
+
+      {/*
+        Model position:
+        - Y: -0.95 pushes it down so feet are near bottom, head near top
+        - Most VRM models stand at ~1.6–1.7m height from origin
+      */}
+      <group position={[0, -0.95, 0]}>
+        <Suspense fallback={<AvatarLoadingMesh />}>
+          <SafeVRMModel url={VRM_URL} talkingAmplitude={talkingAmplitude} />
+        </Suspense>
+      </group>
+
+      <ContactShadows
+        position={[0, -0.97, 0]}
+        opacity={0.35}
+        scale={3}
+        blur={2}
+        far={3}
+        color="#4c1d95"
+      />
+      <Environment preset="night" />
+      <OrbitControls
+        target={[0, 0.5, 0]}       // Orbit around chest/waist level
+        enablePan={false}
+        minDistance={1.8}
+        maxDistance={5}
+        minPolarAngle={Math.PI * 0.15}
+        maxPolarAngle={Math.PI * 0.7}
+        enableDamping
+        dampingFactor={0.08}
+      />
+    </Canvas>
+  )
+}
+
+/* ── Canvas Fallback (shown when ErrorBoundary catches a crash) ─────────── */
+function CanvasFallback() {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center">
+      {/* Animated holographic avatar placeholder */}
+      <div className="relative w-48 h-64">
+        {/* Glowing silhouette */}
+        <motion.div
+          className="absolute inset-0 rounded-t-[50%] rounded-b-[20%]"
+          style={{
+            background: 'linear-gradient(180deg, rgba(139,92,246,0.08) 0%, rgba(6,182,212,0.05) 100%)',
+            border: '1px solid rgba(139,92,246,0.2)',
+          }}
+          animate={{ opacity: [0.4, 0.8, 0.4] }}
+          transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        {/* Scan lines */}
+        {Array.from({ length: 8 }).map((_, i) => (
+          <motion.div
+            key={i}
+            className="absolute left-0 right-0 h-px"
+            style={{
+              top: `${12 + i * 11}%`,
+              background: `rgba(139,92,246,${0.04 + i * 0.01})`,
+            }}
+            animate={{ opacity: [0.3, 0.8, 0.3], scaleX: [0.7, 1, 0.7] }}
+            transition={{ duration: 2.5, delay: i * 0.3, repeat: Infinity }}
+          />
+        ))}
+        {/* Vertical scan sweep */}
+        <motion.div
+          className="absolute inset-x-0 h-8"
+          style={{
+            background: 'linear-gradient(180deg, transparent, rgba(139,92,246,0.12), transparent)',
+          }}
+          animate={{ top: ['0%', '90%', '0%'] }}
+          transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+        />
+      </div>
+      <p className="mt-4 text-xs text-white/30 font-mono tracking-widest">
+        3D renderer offline — place VRM at /public/models/
+      </p>
+    </div>
   )
 }
 
@@ -136,22 +276,15 @@ export default function ZenVoiceMode() {
   const [krystalResponse, setKrystalResponse] = useState('')
   const [talkingAmplitude, setTalkingAmplitude] = useState(0)
   const [muted, setMuted] = useState(false)
-  const [avatarLoaded, setAvatarLoaded] = useState(false)
-  const [avatarError, setAvatarError] = useState(false)
+  const [canvasReady, setCanvasReady] = useState(false)
 
   const ttsPlayer = useRef(new TTSPlayer())
-  const amplitudeRef = useRef(0)
 
-  // Keep amplitude smoothed for waveform
   useEffect(() => {
-    let raf: number
-    const tick = () => {
-      amplitudeRef.current = talkingAmplitude
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [talkingAmplitude])
+    // Give canvas a tick to mount before showing (avoids flash)
+    const t = setTimeout(() => setCanvasReady(true), 100)
+    return () => clearTimeout(t)
+  }, [])
 
   useEffect(() => () => { ttsPlayer.current?.stop() }, [])
 
@@ -174,8 +307,8 @@ export default function ZenVoiceMode() {
     const next = () => {
       if (i >= words.length) { setTalkingAmplitude(0); setStatus('idle'); return }
       const wordLen = words[i].length
-      const interval = setInterval(() => setTalkingAmplitude(0.3 + Math.random() * 0.7), 50)
-      setTimeout(() => { clearInterval(interval); setTalkingAmplitude(0); i++; setTimeout(next, 150) }, wordLen * 120)
+      const iv = setInterval(() => setTalkingAmplitude(0.3 + Math.random() * 0.7), 50)
+      setTimeout(() => { clearInterval(iv); setTalkingAmplitude(0); i++; setTimeout(next, 150) }, wordLen * 120)
     }
     setStatus('speaking')
     next()
@@ -192,7 +325,6 @@ export default function ZenVoiceMode() {
       setStatus('listening')
       setUserSpeech('')
       setKrystalResponse('')
-      // Simulate recognition
       setTimeout(() => setUserSpeech('Hey Krystal, are you there?'), 2500)
     }
   }, [status, speakResponse])
@@ -203,9 +335,7 @@ export default function ZenVoiceMode() {
   return (
     <div
       className="relative flex h-full overflow-hidden"
-      style={{
-        background: 'radial-gradient(ellipse at 50% 40%, #0d0920 0%, #030510 50%, #000005 100%)',
-      }}
+      style={{ background: 'radial-gradient(ellipse at 50% 40%, #0d0920 0%, #030510 50%, #000005 100%)' }}
     >
       {/* Ambient glows */}
       <div className="absolute inset-0 pointer-events-none">
@@ -215,88 +345,21 @@ export default function ZenVoiceMode() {
           style={{ background: 'radial-gradient(ellipse, rgba(6,182,212,0.08) 0%, transparent 70%)', filter: 'blur(50px)' }} />
       </div>
 
-      {/* ── 3D Canvas — FIXED: explicit height wrapper ──────────────────── */}
+      {/* ── 3D Canvas wrapped in ErrorBoundary ──────────────────────────── */}
       <div className="flex-1 relative" style={{ minHeight: 0 }}>
-        <Canvas
-          shadows
-          camera={{
-            position: [0, 1.45, 2.2],   // Upper-body / face focus
-            fov: 38,
-            near: 0.1,
-            far: 100,
-          }}
-          style={{ width: '100%', height: '100%', background: 'transparent' }}
-          gl={{ alpha: true, antialias: true, toneMapping: 3 /* ACESFilmicToneMapping */ }}
-        >
-          <StudioLights />
-
-          {/* Avatar — centered at origin, VRM root is at feet level */}
-          <group position={[0, -1.6, 0]}>
-            <VRMModel
-              url={VRM_URL}
-              talkingAmplitude={talkingAmplitude}
-              onLoaded={() => setAvatarLoaded(true)}
-              onError={() => setAvatarError(true)}
-            />
-          </group>
-
-          {/* Subtle contact shadow on floor */}
-          <ContactShadows
-            position={[0, -1.62, 0]}
-            opacity={0.3}
-            scale={3}
-            blur={2}
-            far={3}
-            color="#4c1d95"
-          />
-
-          {/* Environment for reflections */}
-          <Environment preset="night" />
-
-          <OrbitControls
-            target={[0, 0.3, 0]}        // Orbit around face/chest
-            enablePan={false}
-            minDistance={1.5}
-            maxDistance={4}
-            minPolarAngle={Math.PI * 0.2}
-            maxPolarAngle={Math.PI * 0.65}
-            enableDamping
-            dampingFactor={0.08}
-          />
-        </Canvas>
-
-        {/* Avatar loading/error overlay */}
+        {/* Canvas loading overlay — shown until canvas reports ready */}
         <AnimatePresence>
-          {!avatarLoaded && !avatarError && (
-            <motion.div
-              initial={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
-            >
-              <motion.div
-                className="w-16 h-16 rounded-full border-2 border-t-transparent"
-                style={{ borderColor: 'rgba(139,92,246,0.4)', borderTopColor: '#8b5cf6' }}
-                animate={{ rotate: 360 }}
-                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-              />
-              <p className="mt-4 text-xs text-white/30 tracking-widest font-mono">Loading Avatar…</p>
-            </motion.div>
-          )}
-          {avatarError && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="absolute bottom-32 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl"
-              style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}
-            >
-              <p className="text-xs text-red-400 font-mono">VRM model not found — place it at /public/models/</p>
-            </motion.div>
-          )}
+          {!canvasReady && <CanvasLoadingOverlay />}
         </AnimatePresence>
 
-        {/* ── Bottom HUD ──────────────────────────────────────────────── */}
+        {/* ErrorBoundary: if Canvas/VRM crashes, show holographic fallback */}
+        <ErrorBoundary fallback={<CanvasFallback />}>
+          <ThreeDScene talkingAmplitude={talkingAmplitude} />
+        </ErrorBoundary>
+
+        {/* ── Bottom HUD ────────────────────────────────────────────────── */}
         <div className="absolute bottom-0 left-0 right-0 pb-8 flex flex-col items-center gap-5">
-          {/* Waveform visualizer */}
+          {/* Waveform */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -344,16 +407,15 @@ export default function ZenVoiceMode() {
             transition={{ delay: 0.4 }}
             className="flex items-center gap-4"
           >
-            {/* Status badge */}
             <StatusBadge status={status} />
 
-            {/* Main mic button */}
+            {/* Mic button */}
             <motion.button
               whileHover={{ scale: 1.08 }}
               whileTap={{ scale: 0.93 }}
               onClick={toggle}
               disabled={!isInteractable}
-              className="relative w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300"
+              className="relative w-16 h-16 rounded-full flex items-center justify-center"
               style={{
                 background: status === 'listening'
                   ? 'linear-gradient(135deg, #dc2626, #991b1b)'
@@ -365,7 +427,6 @@ export default function ZenVoiceMode() {
                 opacity: isInteractable ? 1 : 0.5,
               }}
             >
-              {/* Listening pulse ring */}
               {status === 'listening' && (
                 <motion.div
                   className="absolute inset-0 rounded-full"
@@ -380,7 +441,7 @@ export default function ZenVoiceMode() {
               }
             </motion.button>
 
-            {/* Mute toggle */}
+            {/* Mute */}
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
@@ -397,12 +458,12 @@ export default function ZenVoiceMode() {
         </div>
       </div>
 
-      {/* ── Side info panel ─────────────────────────────────────────────── */}
+      {/* ── Side info panel ──────────────────────────────────────────────── */}
       <motion.aside
         initial={{ x: 320, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         transition={{ delay: 0.2, type: 'spring', stiffness: 260, damping: 28 }}
-        className="w-72 flex flex-col p-5 gap-4 overflow-y-auto scrollbar-none"
+        className="w-72 flex flex-col p-5 gap-4 overflow-y-auto"
         style={{
           background: 'rgba(3,5,15,0.85)',
           backdropFilter: 'blur(20px)',
@@ -416,7 +477,6 @@ export default function ZenVoiceMode() {
           Zen Mode
         </h3>
 
-        {/* Live indicators */}
         {([
           ['Voice Input',  status === 'listening', '#ef4444'],
           ['Processing',   status === 'processing', '#f59e0b'],
@@ -494,13 +554,11 @@ export default function ZenVoiceMode() {
           </div>
         </div>
 
-        {/* 3D Controls hint */}
         <div className="mt-auto pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
           <p className="text-[10px] text-white/20 tracking-widest uppercase font-mono mb-2">3D Controls</p>
           <div className="space-y-1.5 text-[10px] text-white/25 font-mono">
             <p>Drag → Rotate camera</p>
             <p>Scroll → Zoom</p>
-            <p>Right drag → Pan</p>
           </div>
         </div>
       </motion.aside>

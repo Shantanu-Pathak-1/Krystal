@@ -2,29 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Google Fonts ─────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Syne:wght@400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+
 @layer base {
   body {
     @apply bg-krystal-dark text-white;
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: 'Syne', system-ui, sans-serif;
+  }
+
+  /* ── Global Custom Scrollbars ─────────────────────────────────────── */
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(139, 92, 246, 0.4) rgba(5, 8, 16, 0.8);
+  }
+
+  /* Webkit (Chrome, Edge, Safari) */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(3, 5, 14, 0.95);
+    border-radius: 100vw;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+      180deg,
+      rgba(139, 92, 246, 0.55) 0%,
+      rgba(6, 182, 212, 0.45) 100%
+    );
+    border-radius: 100vw;
+    box-shadow:
+      0 0 6px rgba(139, 92, 246, 0.5),
+      0 0 12px rgba(6, 182, 212, 0.2);
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      180deg,
+      rgba(167, 139, 250, 0.8) 0%,
+      rgba(34, 211, 238, 0.7) 100%
+    );
+    box-shadow:
+      0 0 10px rgba(167, 139, 250, 0.7),
+      0 0 20px rgba(34, 211, 238, 0.35);
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    background: linear-gradient(
+      180deg,
+      rgba(139, 92, 246, 1) 0%,
+      rgba(6, 182, 212, 0.9) 100%
+    );
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: rgba(3, 5, 14, 0.95);
+  }
+
+  /* Horizontal scrollbars */
+  ::-webkit-scrollbar:horizontal {
+    height: 4px;
   }
 }
 
 @layer components {
+  /* Legacy thin scrollbar util — kept for backward compat */
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #374151 #1f2937;
+    scrollbar-color: rgba(139, 92, 246, 0.4) rgba(5, 8, 16, 0.8);
   }
-  
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
+
+  /* Hide scrollbar but keep scroll behavior */
+  .scrollbar-none {
+    scrollbar-width: none;
   }
-  
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: #1f2937;
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
-  
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #374151;
-    border-radius: 3px;
+
+  /* Neon glow text utility */
+  .text-glow-purple {
+    text-shadow:
+      0 0 10px rgba(139, 92, 246, 0.8),
+      0 0 20px rgba(139, 92, 246, 0.4),
+      0 0 40px rgba(139, 92, 246, 0.2);
+  }
+  .text-glow-cyan {
+    text-shadow:
+      0 0 10px rgba(6, 182, 212, 0.8),
+      0 0 20px rgba(6, 182, 212, 0.4),
+      0 0 40px rgba(6, 182, 212, 0.2);
+  }
+
+  /* Glass card base */
+  .glass-card {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 1rem;
   }
 }
