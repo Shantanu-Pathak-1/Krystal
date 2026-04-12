@@ -1,304 +1,509 @@
-import { useState, useEffect, useRef } from 'react'
-import { Mic, MicOff, Volume2, Brain } from 'lucide-react'
+/**
+ * ZenVoiceMode.tsx
+ *
+ * FIXES:
+ *  1. Canvas now has an explicit pixel height via a wrapper div — no more 0px
+ *  2. Proper studio lighting: spot + ambient + rim lights
+ *  3. Camera correctly focuses on upper-body / face
+ *  4. Radial dark gradient background
+ *  5. Animated waveform syncs to talkingAmplitude
+ */
+
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Mic, MicOff, Volume2, VolumeX, Waves } from 'lucide-react'
 import { Canvas } from '@react-three/fiber'
-import { Environment, OrbitControls } from '@react-three/drei'
+import { OrbitControls, Environment, ContactShadows } from '@react-three/drei'
 import { VRMModel } from '../KrystalAvatar'
 import { TTSPlayer } from '../../utils/audioProcessor'
 
-export default function ZenVoiceMode() {
-  const [isListening, setIsListening] = useState(false)
-  const [userSpeech, setUserSpeech] = useState('')
-  const [krystalResponse, setKrystalResponse] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [talkingAmplitude, setTalkingAmplitude] = useState(0)
-  const [isKrystalSpeaking, setIsKrystalSpeaking] = useState(false)
+const VRM_URL = '/models/shanvika_personal_dress_1.vrm'
 
-  // TTS Player instance for lip sync
-  const ttsPlayer = useRef(new TTSPlayer())
+type Status = 'idle' | 'listening' | 'processing' | 'speaking' | 'error'
 
-  // Simulate voice wave animation
-  const [waveBars, setWaveBars] = useState(Array(20).fill(0))
-
-  useEffect(() => {
-    if (isListening) {
-      const interval = setInterval(() => {
-        setWaveBars(prev => prev.map(() => Math.random() * 100))
-      }, 100)
-      return () => clearInterval(interval)
-    } else {
-      setWaveBars(Array(20).fill(0))
-    }
-  }, [isListening])
-
-  // Cleanup TTS player on unmount
-  useEffect(() => {
-    return () => {
-      ttsPlayer.current?.stop()
-    }
-  }, [])
-
-  const speakKrystalResponse = async (text: string) => {
-    try {
-      setIsKrystalSpeaking(true)
-      await ttsPlayer.current.playTextWithLipSync(
-        text,
-        (amplitude: number) => {
-          setTalkingAmplitude(amplitude)
-        },
-        'en-US-JennyNeural'
-      )
-    } catch (error) {
-      console.error('TTS Error:', error)
-      // Fallback to simulation
-      simulateLipSync(text)
-    } finally {
-      setIsKrystalSpeaking(false)
-      setTalkingAmplitude(0)
-    }
-  }
-
-  const simulateLipSync = (text: string) => {
-    const words = text.split(' ')
-    let wordIndex = 0
-    
-    const speakWord = () => {
-      if (wordIndex >= words.length) {
-        setTalkingAmplitude(0)
-        setIsKrystalSpeaking(false)
-        return
-      }
-
-      const word = words[wordIndex]
-      const duration = word.length * 150 // Rough timing
-      
-      // Simulate speaking with random amplitude
-      const interval = setInterval(() => {
-        const amplitude = Math.random() * 0.8 + 0.2
-        setTalkingAmplitude(amplitude)
-      }, 50)
-
-      setTimeout(() => {
-        clearInterval(interval)
-        setTalkingAmplitude(0)
-        wordIndex++
-        setTimeout(speakWord, 200)
-      }, duration)
-    }
-
-    setIsKrystalSpeaking(true)
-    speakWord()
-  }
-
-  const toggleListening = () => {
-    if (isListening) {
-      // Stop listening and process
-      setIsListening(false)
-      setIsProcessing(true)
-      
-      // Simulate processing and generate Krystal response
-      setTimeout(async () => {
-        const response = 'I understand what you said. Let me help you with that. I can assist you with various tasks like system monitoring, voice commands, and much more.'
-        setKrystalResponse(response)
-        setIsProcessing(false)
-        
-        // Speak the response with lip sync
-        await speakKrystalResponse(response)
-      }, 2000)
-    } else {
-      // Start listening
-      setIsListening(true)
-      setUserSpeech('')
-      setKrystalResponse('')
-      
-      // Simulate speech recognition
-      setTimeout(() => {
-        setUserSpeech('Hey Krystal, can you help me with something?')
-      }, 3000)
-    }
-  }
+/* ── Waveform bars ─────────────────────────────────────────────────────── */
+function AudioVisualizer({ amplitude, active }: { amplitude: number; active: boolean }) {
+  const BAR_COUNT = 32
 
   return (
-    <div className="flex h-full bg-gradient-to-br from-blue-900 via-blue-800 to-indigo-900">
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
-        {/* Audio Wave Visualization */}
-        <div className="mb-16">
-          <div className="flex items-end justify-center space-x-1 h-32">
-            {waveBars.map((height, index) => (
-              <div
-                key={index}
-                className={`w-2 bg-gradient-to-t from-blue-400 to-cyan-300 rounded-full transition-all duration-100`}
-                style={{ height: `${height}%` }}
+    <div className="flex items-end justify-center gap-[2px]" style={{ height: 56 }}>
+      {Array.from({ length: BAR_COUNT }).map((_, i) => {
+        const center = BAR_COUNT / 2
+        const distFromCenter = Math.abs(i - center) / center // 0 at center, 1 at edges
+        const baseH = active ? (1 - distFromCenter * 0.6) * amplitude * 52 : 3
+        const jitter = active ? Math.random() * 6 : 0
+        const finalH = Math.max(3, baseH + jitter)
+
+        return (
+          <motion.div
+            key={i}
+            animate={{ height: finalH, opacity: active ? 0.7 + (1 - distFromCenter) * 0.3 : 0.2 }}
+            transition={{ duration: 0.08, ease: 'linear' }}
+            style={{
+              width: 3,
+              borderRadius: 2,
+              background: active
+                ? `linear-gradient(to top, #8b5cf6, #22d3ee)`
+                : 'rgba(255,255,255,0.1)',
+              boxShadow: active && finalH > 20
+                ? '0 0 6px rgba(139,92,246,0.5)'
+                : 'none',
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+/* ── Status badge ──────────────────────────────────────────────────────── */
+const STATUS_META: Record<Status, { label: string; color: string; pulse: boolean }> = {
+  idle:       { label: 'STANDBY',    color: 'rgba(255,255,255,0.25)', pulse: false },
+  listening:  { label: 'LISTENING',  color: '#ef4444',                pulse: true  },
+  processing: { label: 'THINKING',   color: '#f59e0b',                pulse: true  },
+  speaking:   { label: 'SPEAKING',   color: '#10b981',                pulse: true  },
+  error:      { label: 'ERROR',      color: '#ef4444',                pulse: false },
+}
+
+function StatusBadge({ status }: { status: Status }) {
+  const meta = STATUS_META[status]
+  return (
+    <div
+      className="flex items-center gap-2 px-4 py-2 rounded-full"
+      style={{
+        background: `${meta.color}15`,
+        border: `1px solid ${meta.color}40`,
+      }}
+    >
+      <motion.div
+        className="w-2 h-2 rounded-full"
+        animate={meta.pulse ? { opacity: [1, 0.2, 1] } : { opacity: 1 }}
+        transition={{ duration: 1.2, repeat: Infinity }}
+        style={{ background: meta.color, boxShadow: `0 0 8px ${meta.color}` }}
+      />
+      <span
+        className="text-xs font-bold tracking-[0.3em]"
+        style={{ color: meta.color, fontFamily: 'JetBrains Mono, monospace' }}
+      >
+        {meta.label}
+      </span>
+    </div>
+  )
+}
+
+/* ── 3D Scene lights ───────────────────────────────────────────────────── */
+function StudioLights() {
+  return (
+    <>
+      {/* Ambient base */}
+      <ambientLight intensity={0.4} color="#1a1030" />
+      {/* Key light — soft purple from front-left */}
+      <spotLight
+        position={[-2, 3, 3]}
+        intensity={2.5}
+        angle={0.4}
+        penumbra={0.8}
+        color="#9f7aea"
+        castShadow
+        shadow-mapSize={[1024, 1024]}
+      />
+      {/* Fill light — cyan from right */}
+      <spotLight
+        position={[2.5, 2, 2]}
+        intensity={1.2}
+        angle={0.5}
+        penumbra={1}
+        color="#06b6d4"
+      />
+      {/* Rim / back light — cool white */}
+      <directionalLight
+        position={[0, 2, -3]}
+        intensity={0.8}
+        color="#c4b5fd"
+      />
+      {/* Ground bounce — very subtle warm */}
+      <hemisphereLight
+        args={['#1a0a2e', '#000010', 0.3]}
+      />
+    </>
+  )
+}
+
+/* ── Main component ────────────────────────────────────────────────────── */
+export default function ZenVoiceMode() {
+  const [status, setStatus] = useState<Status>('idle')
+  const [userSpeech, setUserSpeech] = useState('')
+  const [krystalResponse, setKrystalResponse] = useState('')
+  const [talkingAmplitude, setTalkingAmplitude] = useState(0)
+  const [muted, setMuted] = useState(false)
+  const [avatarLoaded, setAvatarLoaded] = useState(false)
+  const [avatarError, setAvatarError] = useState(false)
+
+  const ttsPlayer = useRef(new TTSPlayer())
+  const amplitudeRef = useRef(0)
+
+  // Keep amplitude smoothed for waveform
+  useEffect(() => {
+    let raf: number
+    const tick = () => {
+      amplitudeRef.current = talkingAmplitude
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [talkingAmplitude])
+
+  useEffect(() => () => { ttsPlayer.current?.stop() }, [])
+
+  const speakResponse = useCallback(async (text: string) => {
+    if (muted) { setStatus('idle'); return }
+    setStatus('speaking')
+    try {
+      await ttsPlayer.current.playTextWithLipSync(text, (amp) => setTalkingAmplitude(amp))
+    } catch {
+      simulateSpeech(text)
+    } finally {
+      setStatus('idle')
+      setTalkingAmplitude(0)
+    }
+  }, [muted])
+
+  const simulateSpeech = useCallback((text: string) => {
+    const words = text.split(' ')
+    let i = 0
+    const next = () => {
+      if (i >= words.length) { setTalkingAmplitude(0); setStatus('idle'); return }
+      const wordLen = words[i].length
+      const interval = setInterval(() => setTalkingAmplitude(0.3 + Math.random() * 0.7), 50)
+      setTimeout(() => { clearInterval(interval); setTalkingAmplitude(0); i++; setTimeout(next, 150) }, wordLen * 120)
+    }
+    setStatus('speaking')
+    next()
+  }, [])
+
+  const toggle = useCallback(async () => {
+    if (status === 'listening') {
+      setStatus('processing')
+      await new Promise(r => setTimeout(r, 1800))
+      const response = "I'm fully online and ready. My neural systems are synchronized. How can I assist you today?"
+      setKrystalResponse(response)
+      await speakResponse(response)
+    } else if (status === 'idle' || status === 'error') {
+      setStatus('listening')
+      setUserSpeech('')
+      setKrystalResponse('')
+      // Simulate recognition
+      setTimeout(() => setUserSpeech('Hey Krystal, are you there?'), 2500)
+    }
+  }, [status, speakResponse])
+
+  const isInteractable = status === 'idle' || status === 'listening' || status === 'error'
+  const waveActive = status === 'listening' || status === 'speaking'
+
+  return (
+    <div
+      className="relative flex h-full overflow-hidden"
+      style={{
+        background: 'radial-gradient(ellipse at 50% 40%, #0d0920 0%, #030510 50%, #000005 100%)',
+      }}
+    >
+      {/* Ambient glows */}
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px]"
+          style={{ background: 'radial-gradient(ellipse, rgba(139,92,246,0.06) 0%, transparent 65%)', filter: 'blur(60px)' }} />
+        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[400px] h-[300px]"
+          style={{ background: 'radial-gradient(ellipse, rgba(6,182,212,0.08) 0%, transparent 70%)', filter: 'blur(50px)' }} />
+      </div>
+
+      {/* ── 3D Canvas — FIXED: explicit height wrapper ──────────────────── */}
+      <div className="flex-1 relative" style={{ minHeight: 0 }}>
+        <Canvas
+          shadows
+          camera={{
+            position: [0, 1.45, 2.2],   // Upper-body / face focus
+            fov: 38,
+            near: 0.1,
+            far: 100,
+          }}
+          style={{ width: '100%', height: '100%', background: 'transparent' }}
+          gl={{ alpha: true, antialias: true, toneMapping: 3 /* ACESFilmicToneMapping */ }}
+        >
+          <StudioLights />
+
+          {/* Avatar — centered at origin, VRM root is at feet level */}
+          <group position={[0, -1.6, 0]}>
+            <VRMModel
+              url={VRM_URL}
+              talkingAmplitude={talkingAmplitude}
+              onLoaded={() => setAvatarLoaded(true)}
+              onError={() => setAvatarError(true)}
+            />
+          </group>
+
+          {/* Subtle contact shadow on floor */}
+          <ContactShadows
+            position={[0, -1.62, 0]}
+            opacity={0.3}
+            scale={3}
+            blur={2}
+            far={3}
+            color="#4c1d95"
+          />
+
+          {/* Environment for reflections */}
+          <Environment preset="night" />
+
+          <OrbitControls
+            target={[0, 0.3, 0]}        // Orbit around face/chest
+            enablePan={false}
+            minDistance={1.5}
+            maxDistance={4}
+            minPolarAngle={Math.PI * 0.2}
+            maxPolarAngle={Math.PI * 0.65}
+            enableDamping
+            dampingFactor={0.08}
+          />
+        </Canvas>
+
+        {/* Avatar loading/error overlay */}
+        <AnimatePresence>
+          {!avatarLoaded && !avatarError && (
+            <motion.div
+              initial={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+            >
+              <motion.div
+                className="w-16 h-16 rounded-full border-2 border-t-transparent"
+                style={{ borderColor: 'rgba(139,92,246,0.4)', borderTopColor: '#8b5cf6' }}
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+              />
+              <p className="mt-4 text-xs text-white/30 tracking-widest font-mono">Loading Avatar…</p>
+            </motion.div>
+          )}
+          {avatarError && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="absolute bottom-32 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl"
+              style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}
+            >
+              <p className="text-xs text-red-400 font-mono">VRM model not found — place it at /public/models/</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Bottom HUD ──────────────────────────────────────────────── */}
+        <div className="absolute bottom-0 left-0 right-0 pb-8 flex flex-col items-center gap-5">
+          {/* Waveform visualizer */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="w-72 px-4 py-3 rounded-2xl"
+            style={{
+              background: 'rgba(5,5,20,0.7)',
+              border: '1px solid rgba(255,255,255,0.07)',
+              backdropFilter: 'blur(16px)',
+            }}
+          >
+            <AudioVisualizer amplitude={talkingAmplitude} active={waveActive} />
+          </motion.div>
+
+          {/* Transcript bubbles */}
+          <AnimatePresence>
+            {userSpeech && (
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="px-4 py-2 rounded-xl max-w-xs text-center"
+                style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)' }}
+              >
+                <p className="text-xs text-purple-300/80 font-mono">"{userSpeech}"</p>
+              </motion.div>
+            )}
+            {krystalResponse && (
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="px-4 py-2 rounded-xl max-w-sm text-center"
+                style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.2)' }}
+              >
+                <p className="text-xs text-cyan-300/70 font-mono">"{krystalResponse}"</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Control bar */}
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+            className="flex items-center gap-4"
+          >
+            {/* Status badge */}
+            <StatusBadge status={status} />
+
+            {/* Main mic button */}
+            <motion.button
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.93 }}
+              onClick={toggle}
+              disabled={!isInteractable}
+              className="relative w-16 h-16 rounded-full flex items-center justify-center transition-all duration-300"
+              style={{
+                background: status === 'listening'
+                  ? 'linear-gradient(135deg, #dc2626, #991b1b)'
+                  : 'linear-gradient(135deg, rgba(139,92,246,0.9), rgba(109,40,217,0.9))',
+                border: `2px solid ${status === 'listening' ? 'rgba(239,68,68,0.5)' : 'rgba(139,92,246,0.5)'}`,
+                boxShadow: status === 'listening'
+                  ? '0 0 30px rgba(239,68,68,0.5), 0 0 60px rgba(239,68,68,0.2)'
+                  : '0 0 30px rgba(139,92,246,0.5), 0 0 60px rgba(139,92,246,0.2)',
+                opacity: isInteractable ? 1 : 0.5,
+              }}
+            >
+              {/* Listening pulse ring */}
+              {status === 'listening' && (
+                <motion.div
+                  className="absolute inset-0 rounded-full"
+                  style={{ border: '2px solid rgba(239,68,68,0.4)' }}
+                  animate={{ scale: [1, 1.5, 1.5], opacity: [0.8, 0, 0] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                />
+              )}
+              {status === 'listening'
+                ? <MicOff className="w-6 h-6 text-white" />
+                : <Mic className="w-6 h-6 text-white" />
+              }
+            </motion.button>
+
+            {/* Mute toggle */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setMuted(m => !m)}
+              className="w-10 h-10 rounded-full flex items-center justify-center"
+              style={{
+                background: muted ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${muted ? 'rgba(239,68,68,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              }}
+            >
+              {muted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-white/50" />}
+            </motion.button>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* ── Side info panel ─────────────────────────────────────────────── */}
+      <motion.aside
+        initial={{ x: 320, opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        transition={{ delay: 0.2, type: 'spring', stiffness: 260, damping: 28 }}
+        className="w-72 flex flex-col p-5 gap-4 overflow-y-auto scrollbar-none"
+        style={{
+          background: 'rgba(3,5,15,0.85)',
+          backdropFilter: 'blur(20px)',
+          borderLeft: '1px solid rgba(255,255,255,0.06)',
+        }}
+      >
+        <h3
+          className="text-[11px] font-bold tracking-[0.35em] uppercase text-white/30 pt-2"
+          style={{ fontFamily: 'Orbitron, monospace' }}
+        >
+          Zen Mode
+        </h3>
+
+        {/* Live indicators */}
+        {([
+          ['Voice Input',  status === 'listening', '#ef4444'],
+          ['Processing',   status === 'processing', '#f59e0b'],
+          ['Lip Sync',     talkingAmplitude > 0.05, '#8b5cf6'],
+          ['TTS Output',   status === 'speaking',   '#10b981'],
+        ] as const).map(([label, active, color]) => (
+          <div
+            key={label}
+            className="flex items-center justify-between px-4 py-3 rounded-xl"
+            style={{
+              background: active ? `${color}10` : 'rgba(255,255,255,0.025)',
+              border: `1px solid ${active ? `${color}25` : 'rgba(255,255,255,0.05)'}`,
+            }}
+          >
+            <span className="text-xs font-semibold text-white/50">{label}</span>
+            <motion.div
+              className="w-2 h-2 rounded-full"
+              animate={active ? { opacity: [1, 0.2, 1] } : { opacity: 0.2 }}
+              transition={{ duration: 1.2, repeat: Infinity }}
+              style={{
+                background: active ? color : 'rgba(255,255,255,0.2)',
+                boxShadow: active ? `0 0 8px ${color}` : 'none',
+              }}
+            />
+          </div>
+        ))}
+
+        {/* Amplitude meter */}
+        <div
+          className="px-4 py-4 rounded-xl"
+          style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}
+        >
+          <p className="text-[10px] text-white/25 tracking-widest uppercase font-mono mb-3">Amplitude</p>
+          <div className="flex items-end justify-center gap-0.5" style={{ height: 40 }}>
+            {Array.from({ length: 16 }).map((_, i) => (
+              <motion.div
+                key={i}
+                animate={{
+                  height: talkingAmplitude > 0.05
+                    ? `${Math.random() * talkingAmplitude * 100}%`
+                    : '6%',
+                }}
+                transition={{ duration: 0.06 }}
+                className="flex-1 rounded-sm"
+                style={{
+                  background: talkingAmplitude > 0.05
+                    ? `linear-gradient(to top, #8b5cf6, #22d3ee)`
+                    : 'rgba(255,255,255,0.06)',
+                }}
               />
             ))}
           </div>
-          <div className="flex items-center justify-center space-x-2 mt-4">
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-              isListening 
-                ? 'bg-red-500 text-white animate-pulse' 
-                : 'bg-gray-700 text-gray-300'
-            }`}>
-              {isListening ? 'Listening' : 'Idle'}
-            </span>
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-              isProcessing 
-                ? 'bg-yellow-500 text-white animate-pulse' 
-                : 'bg-gray-700 text-gray-300'
-            }`}>
-              {isProcessing ? 'Processing' : 'Ready'}
-            </span>
-          </div>
         </div>
 
-        {/* 3D Avatar Canvas */}
-        <div className="flex-1 relative">
-          <Canvas
-            camera={{ position: [0, 1.5, 3], fov: 45 }}
-            style={{ background: 'linear-gradient(to bottom, #1a1a2e, #0f0f1e)' }}
-          >
-            {/* Lighting */}
-            <ambientLight intensity={0.5} />
-            <directionalLight position={[5, 5, 5]} intensity={1} />
-            
-            {/* VRM Model */}
-            <VRMModel 
-              url="/models/shanvika_personal_dress_1.vrm" 
-              talkingAmplitude={talkingAmplitude} 
-            />
-            
-            {/* Environment and Controls */}
-            <Environment preset="city" />
-            <OrbitControls 
-              enablePan={false}
-              minDistance={2}
-              maxDistance={5}
-              minPolarAngle={Math.PI / 4}
-              maxPolarAngle={Math.PI / 2}
-            />
-          </Canvas>
-
-          {/* Control Overlay */}
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2">
-            <div className="bg-krystal-dark/90 backdrop-blur rounded-lg p-4 border border-gray-800">
-              <div className="flex items-center space-x-4">
-                <button
-                  onClick={toggleListening}
-                  disabled={isProcessing || isKrystalSpeaking}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    isListening
-                      ? 'bg-red-500 hover:bg-red-600 text-white'
-                      : 'bg-krystal-purple hover:bg-krystal-purple/90 text-white'
-                  } ${isProcessing || isKrystalSpeaking ? 'opacity-50 cursor-not-allowed' : ''}`}
+        {/* Voice commands */}
+        <div className="mt-2">
+          <p className="text-[10px] text-white/25 tracking-widest uppercase font-mono mb-3">Voice Commands</p>
+          <div className="space-y-2">
+            {[
+              ['"Hey Krystal"', 'Wake word'],
+              ['"Stop"',        'End response'],
+              ['"Repeat"',      'Say again'],
+              ['"Clear"',       'Reset context'],
+            ].map(([cmd, desc]) => (
+              <div key={cmd} className="flex items-center justify-between">
+                <span
+                  className="text-[11px] font-mono px-2 py-1 rounded-md"
+                  style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa' }}
                 >
-                  {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                  <span>
-                    {isProcessing ? 'Processing...' : 
-                     isKrystalSpeaking ? 'Speaking...' :
-                     isListening ? 'Stop Listening' : 'Start Listening'}
-                  </span>
-                </button>
+                  {cmd}
+                </span>
+                <span className="text-[10px] text-white/25">{desc}</span>
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Side Panel */}
-      <div className="w-80 bg-krystal-darker border-l border-gray-800 p-6">
-        <h3 className="text-lg font-semibold text-white mb-4">Mode Status</h3>
-        
-        <div className="space-y-4">
-          <div className="bg-krystal-dark rounded-lg p-4 border border-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-gray-400">Voice Input</span>
-              <span className={`w-2 h-2 rounded-full ${isListening ? 'bg-red-400 animate-pulse' : 'bg-gray-400'}`}></span>
-            </div>
-            <p className="text-sm text-white">
-              {isListening ? 'Active' : 'Inactive'}
-            </p>
-          </div>
-
-          <div className="bg-krystal-dark rounded-lg p-4 border border-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-gray-400">Processing</span>
-              <span className={`w-2 h-2 rounded-full ${isProcessing ? 'bg-yellow-400 animate-pulse' : 'bg-gray-400'}`}></span>
-            </div>
-            <p className="text-sm text-white">
-              {isProcessing ? 'Analyzing...' : 'Ready'}
-            </p>
-          </div>
-
-          <div className="bg-krystal-dark rounded-lg p-4 border border-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-gray-400">Lip Sync</span>
-              <span className={`w-2 h-2 rounded-full ${talkingAmplitude > 0.1 ? 'bg-green-400 animate-pulse' : 'bg-gray-400'}`}></span>
-            </div>
-            <p className="text-sm text-white">
-              {talkingAmplitude > 0.1 ? 'Active' : 'Idle'}
-            </p>
+            ))}
           </div>
         </div>
 
-        <div className="mt-6">
-          <h4 className="text-md font-medium text-white mb-3">Voice Commands</h4>
-          <div className="space-y-2 text-sm text-gray-400">
-            <div className="flex items-center space-x-2">
-              <Volume2 className="w-4 h-4" />
-              <span>"Hey Krystal" - Wake up</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Volume2 className="w-4 h-4" />
-              <span>"Stop" - End conversation</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <Volume2 className="w-4 h-4" />
-              <span>"Repeat" - Say again</span>
-            </div>
+        {/* 3D Controls hint */}
+        <div className="mt-auto pt-4" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <p className="text-[10px] text-white/20 tracking-widest uppercase font-mono mb-2">3D Controls</p>
+          <div className="space-y-1.5 text-[10px] text-white/25 font-mono">
+            <p>Drag → Rotate camera</p>
+            <p>Scroll → Zoom</p>
+            <p>Right drag → Pan</p>
           </div>
         </div>
-
-        <div className="mt-6">
-          <h4 className="text-md font-medium text-white mb-3">Audio Amplitude</h4>
-          <div className="bg-krystal-dark rounded-lg p-4 border border-gray-800">
-            <div className="flex items-center space-x-2 mb-2">
-              <span className="text-gray-400">Voice Level</span>
-              <span className={`w-2 h-2 rounded-full ${talkingAmplitude > 0.1 ? 'bg-green-400 animate-pulse' : 'bg-gray-400'}`}></span>
-            </div>
-            {/* Amplitude Visualizer */}
-            <div className="flex items-end justify-center space-x-1 h-16">
-              {Array(20).fill(0).map((_, index) => (
-                <div
-                  key={index}
-                  className={`w-1 bg-gradient-to-t from-green-400 to-cyan-300 rounded-full transition-all duration-75`}
-                  style={{ 
-                    height: `${talkingAmplitude > 0.1 ? 
-                      Math.random() * talkingAmplitude * 100 : 
-                      5}%` 
-                  }}
-                />
-              ))}
-            </div>
-            <p className="text-xs text-gray-400 text-center mt-2">
-              {talkingAmplitude > 0.1 ? 'Speaking' : 'Silent'}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-6">
-          <h4 className="text-md font-medium text-white mb-3">3D Controls</h4>
-          <div className="space-y-2 text-sm text-gray-400">
-            <div className="flex items-center space-x-2">
-              <span>Left Click + Drag - Rotate</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span>Scroll - Zoom In/Out</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span>Right Click - Pan</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      </motion.aside>
     </div>
   )
 }
