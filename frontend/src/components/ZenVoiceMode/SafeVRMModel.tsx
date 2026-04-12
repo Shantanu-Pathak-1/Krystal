@@ -1,8 +1,6 @@
 /**
- * SafeVRMModel.tsx
- *
- * Root fix: VRM scene stored in state → rendered via <primitive object={vrm.scene} />
- * This avoids the groupRef re-render bug where the scene was added to a stale ref.
+ * SafeVRMModel.tsx — Clean stable animations only.
+ * No gesture system. No body sway. Subtle breathing + blink + lipsync only.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -12,6 +10,7 @@ import * as THREE from 'three'
 interface SafeVRMModelProps {
   url: string
   talkingAmplitude: number
+  emotionState?: string
   onLoaded?: () => void
   onError?: (err: Error) => void
 }
@@ -19,51 +18,64 @@ interface SafeVRMModelProps {
 export default function SafeVRMModel({
   url,
   talkingAmplitude,
+  emotionState = 'idle',
   onLoaded,
   onError,
 }: SafeVRMModelProps) {
-  const vrmRef = useRef<any>(null)
+  const vrmRef    = useRef<any>(null)
   const [vrmScene, setVrmScene] = useState<THREE.Object3D | null>(null)
   const [loadError, setLoadError] = useState(false)
-  const clockRef = useRef(new THREE.Clock())
-  const blinkTimerRef = useRef(0)
-  const nextBlinkRef = useRef(2 + Math.random() * 3)
+
+  const clockRef     = useRef(new THREE.Clock())
+  const blinkTimer   = useRef(0)
+  const nextBlink    = useRef(2.5 + Math.random() * 3)
+  const blinkElapsed = useRef(0)
+  const isBlinking   = useRef(false)
+  const lookCur      = useRef(new THREE.Vector2(0, 0))
+  const lookTgt      = useRef(new THREE.Vector2(0, 0))
+
+  useEffect(() => {
+    const schedule = () => {
+      const id = setTimeout(() => {
+        lookTgt.current.set(
+          (Math.random() - 0.5) * 0.14,
+          (Math.random() - 0.5) * 0.07,
+        )
+        schedule()
+      }, 4000 + Math.random() * 4000)
+      return id
+    }
+    const id = schedule()
+    return () => clearTimeout(id)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
-
     const load = async () => {
       try {
-        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader')
+        const { GLTFLoader }                = await import('three/examples/jsm/loaders/GLTFLoader')
         const { VRMLoaderPlugin, VRMUtils } = await import('@pixiv/three-vrm')
-
         const loader = new (GLTFLoader as any)()
         loader.register((parser: any) => new (VRMLoaderPlugin as any)(parser))
-
         loader.load(
           url,
           (gltf: any) => {
             if (cancelled) return
             const vrm = gltf.userData.vrm
-            if (!vrm) {
-              setLoadError(true)
-              onError?.(new Error('No VRM data in file'))
-              return
-            }
-            // Face camera
+            if (!vrm) { setLoadError(true); onError?.(new Error('No VRM data')); return }
             try { (VRMUtils as any).removeUnnecessaryJoints(gltf.scene) } catch {}
             try { (VRMUtils as any).rotateVRM0(vrm) } catch {
               try { vrm.scene.rotation.y = Math.PI } catch {}
             }
-
+            // Force upright — remove any X/Z tilt baked in
+            try { vrm.scene.rotation.x = 0; vrm.scene.rotation.z = 0 } catch {}
             vrmRef.current = vrm
-            setVrmScene(vrm.scene)   // ← store scene in state, primitive renders it
+            setVrmScene(vrm.scene)
             onLoaded?.()
           },
           undefined,
           (err: any) => {
             if (cancelled) return
-            console.warn('[SafeVRMModel]', err)
             setLoadError(true)
             onError?.(new Error(String(err?.message ?? 'Load failed')))
           }
@@ -74,109 +86,106 @@ export default function SafeVRMModel({
         onError?.(err instanceof Error ? err : new Error(String(err)))
       }
     }
-
     load()
     return () => { cancelled = true }
   }, [url])
 
-  // Animation loop
+  const getBone = (h: any, name: string): any => {
+    try { return h?.getRawBoneNode?.(name) ?? h?.getBoneNode?.(name) ?? null } catch { return null }
+  }
+
   useFrame((_, delta) => {
-    if (!vrmRef.current) return
+    const vrm = vrmRef.current
+    if (!vrm) return
+    try { vrm.update(delta) } catch {}
 
-    try { vrmRef.current.update(delta) } catch {}
+    const t       = clockRef.current.getElapsedTime()
+    const h       = vrm?.humanoid
+    const exprMgr = vrm?.expressionManager
 
-    const t = clockRef.current.getElapsedTime()
-    const humanoid = vrmRef.current?.humanoid
-    const expressionManager = vrmRef.current?.expressionManager
-
-    const getBone = (name: string) => {
+    if (h) {
       try {
-        return humanoid?.getRawBoneNode?.(name) ?? humanoid?.getBoneNode?.(name) ?? null
-      } catch { return null }
-    }
+        /* breathing */
+        const breathe = Math.sin(t * 1.1) * 0.007
+        const spine = getBone(h, 'spine')
+        if (spine) { spine.rotation.x = breathe; spine.rotation.z = 0 }
+        const chest = getBone(h, 'chest')
+        if (chest) { chest.rotation.x = breathe * 0.4; chest.rotation.z = 0 }
+        const hips = getBone(h, 'hips')
+        if (hips) { hips.rotation.x = 0; hips.rotation.z = 0; hips.position.y = Math.sin(t * 1.1) * 0.002 }
 
-    // ── Idle breathing + body sway ────────────────────────────────────
-    if (humanoid) {
-      try {
-        const breathe = Math.sin(t * 1.15) * 0.013
+        /* look drift */
+        lookCur.current.x += (lookTgt.current.x - lookCur.current.x) * delta * 1.0
+        lookCur.current.y += (lookTgt.current.y - lookCur.current.y) * delta * 1.0
 
-        const spine = getBone('spine')
-        if (spine) spine.rotation.x = breathe
-
-        const chest = getBone('chest')
-        if (chest) {
-          chest.rotation.x = breathe * 0.5
-          chest.rotation.z = Math.sin(t * 0.38) * 0.004
+        const neck = getBone(h, 'neck')
+        if (neck) {
+          neck.rotation.y = lookCur.current.x * 0.45 + Math.sin(t * 0.16) * 0.01
+          neck.rotation.x = lookCur.current.y * 0.28
+          neck.rotation.z = 0
         }
-
-        const hips = getBone('hips')
-        if (hips) {
-          hips.rotation.z = Math.sin(t * 0.45) * 0.005
-          hips.position.y = Math.sin(t * 1.15) * 0.003
-        }
-
-        const neck = getBone('neck')
-        if (neck) neck.rotation.y = Math.sin(t * 0.25) * 0.02
-
-        const head = getBone('head')
+        const head = getBone(h, 'head')
         if (head) {
           if (talkingAmplitude > 0.1) {
-            head.rotation.x = Math.sin(t * 7) * talkingAmplitude * 0.05
-            head.rotation.y = Math.sin(t * 2.5) * 0.035
+            head.rotation.x = Math.sin(t * 4.5) * talkingAmplitude * 0.025
+            head.rotation.y = lookCur.current.x * 0.5
+            head.rotation.z = 0
           } else {
-            head.rotation.y = Math.sin(t * 0.28) * 0.055
-            head.rotation.x = Math.sin(t * 0.18) * 0.018
+            head.rotation.x = lookCur.current.y * 0.35 + Math.sin(t * 0.12) * 0.006
+            head.rotation.y = lookCur.current.x * 0.55 + Math.sin(t * 0.2) * 0.014
+            head.rotation.z = 0
           }
         }
 
-        const leftUpperArm = getBone('leftUpperArm')
-        if (leftUpperArm) {
-          leftUpperArm.rotation.z = 1.05 + Math.sin(t * 0.75) * 0.022
-          leftUpperArm.rotation.x = Math.sin(t * 0.5) * 0.018
-        }
+        /* arms — natural straight hang, NO swinging */
+        const lua = getBone(h, 'leftUpperArm')
+        if (lua)  { lua.rotation.x = 0.05;  lua.rotation.z =  1.0; lua.rotation.y = 0 }
+        const rua = getBone(h, 'rightUpperArm')
+        if (rua)  { rua.rotation.x = 0.05;  rua.rotation.z = -1.0; rua.rotation.y = 0 }
+        const lla = getBone(h, 'leftLowerArm')
+        if (lla)  { lla.rotation.x = 0.03;  lla.rotation.z = 0;    lla.rotation.y = 0 }
+        const rla = getBone(h, 'rightLowerArm')
+        if (rla)  { rla.rotation.x = 0.03;  rla.rotation.z = 0;    rla.rotation.y = 0 }
 
-        const rightUpperArm = getBone('rightUpperArm')
-        if (rightUpperArm) {
-          rightUpperArm.rotation.z = -(1.05 + Math.sin(t * 0.75 + Math.PI) * 0.022)
-          rightUpperArm.rotation.x = Math.sin(t * 0.5 + 0.6) * 0.018
+        /* legs — dead straight */
+        for (const name of ['leftUpperLeg','rightUpperLeg','leftLowerLeg','rightLowerLeg']) {
+          const b = getBone(h, name)
+          if (b) { b.rotation.x = 0; b.rotation.z = 0; b.rotation.y = 0 }
         }
       } catch {}
     }
 
-    // ── Lip sync ─────────────────────────────────────────────────────
-    if (expressionManager) {
+    /* lip sync */
+    if (exprMgr) {
       try {
         if (talkingAmplitude > 0.08) {
-          expressionManager.setValue('aa', Math.min(talkingAmplitude * 1.7, 1.0))
+          exprMgr.setValue('aa', Math.min(talkingAmplitude * 1.3, 0.85))
         } else {
-          const cur = expressionManager.getValue?.('aa') ?? 0
-          expressionManager.setValue('aa', Math.max(0, cur * 0.7))
+          const cur = exprMgr.getValue?.('aa') ?? 0
+          exprMgr.setValue('aa', Math.max(0, cur * 0.55))
         }
       } catch {}
 
-      // ── Auto blink ───────────────────────────────────────────────
+      /* blink */
       try {
-        blinkTimerRef.current += delta
-        if (blinkTimerRef.current >= nextBlinkRef.current) {
-          blinkTimerRef.current = 0
-          nextBlinkRef.current = 2.5 + Math.random() * 4
-          ;(vrmRef.current as any).__blinkElapsed = 0
-          ;(vrmRef.current as any).__blinking = true
+        blinkTimer.current += delta
+        if (blinkTimer.current >= nextBlink.current) {
+          blinkTimer.current = 0; nextBlink.current = 3 + Math.random() * 4
+          isBlinking.current = true; blinkElapsed.current = 0
         }
-        if ((vrmRef.current as any).__blinking) {
-          const BLINK_DUR = 0.14
-          ;(vrmRef.current as any).__blinkElapsed += delta
-          const p = Math.min((vrmRef.current as any).__blinkElapsed / BLINK_DUR, 1)
+        if (isBlinking.current) {
+          blinkElapsed.current += delta
+          const p = Math.min(blinkElapsed.current / 0.12, 1)
           const v = p < 0.5 ? p * 2 : (1 - p) * 2
-          try { expressionManager.setValue('blink', v) } catch {
-            try { expressionManager.setValue('blinkLeft', v) } catch {}
-            try { expressionManager.setValue('blinkRight', v) } catch {}
+          try { exprMgr.setValue('blink', v) } catch {
+            try { exprMgr.setValue('blinkLeft', v) } catch {}
+            try { exprMgr.setValue('blinkRight', v) } catch {}
           }
           if (p >= 1) {
-            ;(vrmRef.current as any).__blinking = false
-            try { expressionManager.setValue('blink', 0) } catch {
-              try { expressionManager.setValue('blinkLeft', 0) } catch {}
-              try { expressionManager.setValue('blinkRight', 0) } catch {}
+            isBlinking.current = false
+            try { exprMgr.setValue('blink', 0) } catch {
+              try { exprMgr.setValue('blinkLeft', 0) } catch {}
+              try { exprMgr.setValue('blinkRight', 0) } catch {}
             }
           }
         }
@@ -184,23 +193,19 @@ export default function SafeVRMModel({
     }
   })
 
-  // ── Placeholder (loading or error) ───────────────────────────────
   if (!vrmScene) {
     return (
       <group>
-        {/* Body */}
-        <mesh position={[0, 0.8, 0]}>
+        <mesh position={[0, 0.85, 0]}>
           <cylinderGeometry args={[0.18, 0.22, 1.1, 16]} />
           <meshStandardMaterial color="#8b5cf6" wireframe />
         </mesh>
-        {/* Head */}
         <mesh position={[0, 1.55, 0]}>
           <sphereGeometry args={[0.22, 16, 16]} />
           <meshStandardMaterial color="#22d3ee" wireframe />
         </mesh>
-        {/* Glowing core */}
         <mesh position={[0, 0.9, 0]}>
-          <sphereGeometry args={[0.12, 8, 8]} />
+          <sphereGeometry args={[0.1, 8, 8]} />
           <meshStandardMaterial
             color={loadError ? '#ef4444' : '#a78bfa'}
             emissive={loadError ? '#ef4444' : '#a78bfa'}
@@ -211,6 +216,5 @@ export default function SafeVRMModel({
     )
   }
 
-  // ── Actual VRM model ─────────────────────────────────────────────
   return <primitive object={vrmScene} />
 }
