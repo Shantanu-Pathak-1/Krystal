@@ -8,10 +8,42 @@ import { Mic, MicOff, Volume2, VolumeX, Sparkles } from 'lucide-react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Environment, ContactShadows } from '@react-three/drei'
 import { ErrorBoundary } from '../ErrorBoundary/ErrorBoundary'
-import { TTSPlayer } from '../../utils/audioProcessor'
 import SafeVRMModel from './SafeVRMModel'
+import { useAutonomy } from '../../context/AutonomyContext'
 
 const VRM_URL = '/models/shanvika_personal_dress_1.vrm'
+
+// SpeechRecognition types
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList
+  resultIndex: number
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onresult: ((event: SpeechRecognitionEvent) => void) | null
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
+  onend: (() => void) | null
+  start(): void
+  stop(): void
+}
+
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognition
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: SpeechRecognitionConstructor
+    webkitSpeechRecognition: SpeechRecognitionConstructor
+  }
+}
 
 type Status = 'idle' | 'listening' | 'processing' | 'speaking' | 'error'
 
@@ -264,6 +296,7 @@ function CanvasFallback() {
 
 /* ── Main component ────────────────────────────────────────────────────── */
 export default function ZenVoiceMode() {
+  const { autonomyMode } = useAutonomy()
   const [status, setStatus] = useState<Status>('idle')
   const [userSpeech, setUserSpeech] = useState('')
   const [krystalResponse, setKrystalResponse] = useState('')
@@ -272,14 +305,74 @@ export default function ZenVoiceMode() {
   const [canvasReady, setCanvasReady] = useState(false)
   const [emotionState, setEmotionState] = useState('idle')
 
-  const ttsPlayer = useRef(new TTSPlayer())
+  const recognitionRef = useRef<SpeechRecognition | null>(null)
+  const lipSyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lockedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
+  const lastSpokenResponseRef = useRef<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setCanvasReady(true), 100)
     return () => clearTimeout(t)
   }, [])
 
-  useEffect(() => () => { ttsPlayer.current?.stop() }, [])
+  // Cleanup speech synthesis
+  useEffect(() => () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
+    if (lipSyncIntervalRef.current) {
+      clearInterval(lipSyncIntervalRef.current)
+    }
+  }, [])
+
+  // Robust voice selection function - locks voice in ref
+  const selectAndLockVoice = useCallback(() => {
+    if (lockedVoiceRef.current) return lockedVoiceRef.current
+    if (!('speechSynthesis' in window)) return null
+    
+    const voices = window.speechSynthesis.getVoices()
+    if (voices.length === 0) return null
+    
+    // Priority order for voice selection
+    const preferredVoiceNames = [
+      'Google UK English Female',
+      'Microsoft Zira',
+      'Microsoft Zira - English (United States)',
+      'Samantha',
+      'Google US English',
+      'Google UK English'
+    ]
+    
+    // Try exact matches first
+    for (const name of preferredVoiceNames) {
+      const voice = voices.find(v => v.name === name)
+      if (voice) {
+        lockedVoiceRef.current = voice
+        return voice
+      }
+    }
+    
+    // Fallback: first en-US or en-GB female voice
+    const femaleVoice = voices.find(v => 
+      (v.lang.startsWith('en-US') || v.lang.startsWith('en-GB')) &&
+      (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
+    )
+    if (femaleVoice) {
+      lockedVoiceRef.current = femaleVoice
+      return femaleVoice
+    }
+    
+    // Final fallback: any en-US voice
+    const usVoice = voices.find(v => v.lang.startsWith('en-US'))
+    if (usVoice) {
+      lockedVoiceRef.current = usVoice
+      return usVoice
+    }
+    
+    // Last resort: first available voice
+    lockedVoiceRef.current = voices[0]
+    return voices[0]
+  }, [])
 
   // Sync emotion to status
   useEffect(() => {
@@ -289,46 +382,192 @@ export default function ZenVoiceMode() {
     else setEmotionState('idle')
   }, [status])
 
-  const speakResponse = useCallback(async (text: string) => {
-    if (muted) { setStatus('idle'); return }
+  // Initialize speech synthesis voices
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      const voices = window.speechSynthesis.getVoices()
+      if (voices.length > 0) {
+        selectAndLockVoice()
+      }
+      
+      // Some browsers load voices asynchronously
+      if ('onvoiceschanged' in window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          selectAndLockVoice()
+        }
+      }
+    }
+  }, [selectAndLockVoice])
+
+  // Text-to-speech effect - only speaks when krystalResponse changes to a new value
+  useEffect(() => {
+    if (!krystalResponse || muted || !('speechSynthesis' in window)) {
+      return
+    }
+    
+    // Prevent double-firing: only speak if we haven't spoken this exact response
+    if (krystalResponse === lastSpokenResponseRef.current) return
+    lastSpokenResponseRef.current = krystalResponse
+    
     setStatus('speaking')
-    try {
-      await ttsPlayer.current.playTextWithLipSync(text, (amp) => setTalkingAmplitude(amp))
-    } catch {
-      simulateSpeech(text)
-    } finally {
-      setStatus('idle')
+    
+    // Cancel any ongoing speech before speaking
+    window.speechSynthesis.cancel()
+    
+    const utterance = new SpeechSynthesisUtterance(krystalResponse)
+    utterance.rate = 1
+    utterance.pitch = 1
+    utterance.volume = 1
+    
+    // Use locked voice
+    const voice = selectAndLockVoice()
+    if (voice) {
+      utterance.voice = voice
+    }
+    
+    // Start lip-sync animation
+    if (lipSyncIntervalRef.current) {
+      clearInterval(lipSyncIntervalRef.current)
+    }
+    
+    lipSyncIntervalRef.current = setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        // Fluctuate amplitude based on speaking state
+        const baseAmp = 0.3
+        const variance = Math.random() * 0.5
+        setTalkingAmplitude(baseAmp + variance)
+      } else {
+        setTalkingAmplitude(0)
+      }
+    }, 80)
+    
+    utterance.onend = () => {
+      if (lipSyncIntervalRef.current) {
+        clearInterval(lipSyncIntervalRef.current)
+        lipSyncIntervalRef.current = null
+      }
       setTalkingAmplitude(0)
+      setStatus('idle')
     }
-  }, [muted])
-
-  const simulateSpeech = useCallback((text: string) => {
-    const words = text.split(' ')
-    let i = 0
-    const next = () => {
-      if (i >= words.length) { setTalkingAmplitude(0); setStatus('idle'); return }
-      const wordLen = words[i].length
-      const iv = setInterval(() => setTalkingAmplitude(0.3 + Math.random() * 0.7), 50)
-      setTimeout(() => { clearInterval(iv); setTalkingAmplitude(0); i++; setTimeout(next, 150) }, wordLen * 120)
+    
+    utterance.onerror = () => {
+      if (lipSyncIntervalRef.current) {
+        clearInterval(lipSyncIntervalRef.current)
+        lipSyncIntervalRef.current = null
+      }
+      setTalkingAmplitude(0)
+      setStatus('idle')
     }
-    setStatus('speaking')
-    next()
-  }, [])
+    
+    window.speechSynthesis.speak(utterance)
+  }, [krystalResponse, muted, selectAndLockVoice])
 
-  const toggle = useCallback(async () => {
-    if (status === 'listening') {
-      setStatus('processing')
-      await new Promise(r => setTimeout(r, 1800))
-      const response = "I'm fully online and ready. My neural systems are synchronized. How can I assist you today?"
+  // Send message to backend and get response
+  const sendToBackend = useCallback(async (text: string) => {
+    setStatus('processing')
+    setUserSpeech(text)
+    
+    try {
+      const modeMap: Record<string, string> = {
+        safe: 'Safe',
+        agentic: 'Agentic',
+        god: 'God Mode'
+      }
+      const mode = modeMap[autonomyMode] || 'Agentic'
+      
+      const res = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, mode }),
+      })
+      
+      if (!res.ok) throw new Error('API error')
+      
+      const data = await res.json()
+      const response = data.response || 'I received your message.'
       setKrystalResponse(response)
-      await speakResponse(response)
+      // TTS is handled by useEffect above to prevent double-firing
+    } catch {
+      const errorResponse = '⚠️ Unable to connect to Krystal Engine. Please ensure the backend is running.'
+      setKrystalResponse(errorResponse)
+      setStatus('error')
+      // TTS is handled by useEffect above to prevent double-firing
+    }
+  }, [autonomyMode])
+
+  // Setup SpeechRecognition
+  useEffect(() => {
+    if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) {
+      return
+    }
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = 'en-US'
+    
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let finalTranscript = ''
+      let interimTranscript = ''
+      
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript
+        } else {
+          interimTranscript += transcript
+        }
+      }
+      
+      if (finalTranscript) {
+        setUserSpeech(finalTranscript)
+        // Auto-send when speech is finalized
+        setTimeout(() => {
+          recognition.stop()
+          sendToBackend(finalTranscript)
+        }, 300)
+      } else if (interimTranscript) {
+        setUserSpeech(interimTranscript)
+      }
+    }
+    
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.error('Speech recognition error:', event.error)
+      if (event.error !== 'aborted') {
+        setStatus('error')
+      }
+    }
+    
+    recognition.onend = () => {
+      if (status === 'listening') {
+        setStatus('idle')
+      }
+    }
+    
+    recognitionRef.current = recognition
+  }, [sendToBackend, status])
+
+  const toggle = useCallback(() => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser')
+      return
+    }
+    
+    if (status === 'listening') {
+      recognitionRef.current.stop()
+      setStatus('idle')
     } else if (status === 'idle' || status === 'error') {
-      setStatus('listening')
       setUserSpeech('')
       setKrystalResponse('')
-      setTimeout(() => setUserSpeech('Hey Krystal, are you there?'), 2500)
+      try {
+        recognitionRef.current.start()
+        setStatus('listening')
+      } catch (err) {
+        console.error('Failed to start recording:', err)
+      }
     }
-  }, [status, speakResponse])
+  }, [status])
 
   const isInteractable = status === 'idle' || status === 'listening' || status === 'error'
   const waveActive = status === 'listening' || status === 'speaking'

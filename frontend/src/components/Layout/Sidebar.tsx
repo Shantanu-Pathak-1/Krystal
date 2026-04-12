@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import {
   MessageSquare, Brain, Heart, Shield, Database,
-  Book, Users, LayoutDashboard, Terminal, Settings, Zap
+  Book, LayoutDashboard, Terminal, Settings, Zap, Blocks, Key
 } from 'lucide-react'
 import { ViewMode } from '../../types'
 
@@ -20,19 +20,24 @@ const primaryNav = [
 ]
 
 const secondaryNav = [
-  { id: 'memory',   label: 'Memory Vault',   icon: Database },
-  { id: 'diary',    label: "Krystal's Diary", icon: Book },
-  { id: 'social',   label: 'Social & Guard',  icon: Users },
-  { id: 'security', label: 'Security',         icon: Shield },
+  { id: 'memory',   label: 'Memory Vault',   icon: Database,  view: 'memory' as ViewMode,   color: 'violet' },
+  { id: 'diary',    label: "Krystal's Diary", icon: Book,     view: 'diary' as ViewMode,    color: 'rose' },
+  { id: 'security', label: 'Security & Guard', icon: Shield,   view: 'security' as ViewMode,  color: 'emerald' },
+  { id: 'plugins',  label: 'Plugins Lab',      icon: Blocks,   view: 'plugins' as ViewMode,   color: 'orange' },
+  { id: 'api-keys', label: 'API Keys',       icon: Key,      view: 'api' as ViewMode,      color: 'blue' },
 ]
 
 const colorMap: Record<string, string> = {
-  cyan:   'rgba(6,182,212,0.8)',
-  purple: 'rgba(139,92,246,0.8)',
-  pink:   'rgba(236,72,153,0.8)',
-  blue:   'rgba(59,130,246,0.8)',
-  green:  'rgba(16,185,129,0.8)',
-  amber:  'rgba(245,158,11,0.8)',
+  cyan:    'rgba(6,182,212,0.8)',
+  purple:  'rgba(139,92,246,0.8)',
+  pink:    'rgba(236,72,153,0.8)',
+  blue:    'rgba(59,130,246,0.8)',
+  green:   'rgba(16,185,129,0.8)',
+  amber:   'rgba(245,158,11,0.8)',
+  violet:  'rgba(167,139,250,0.8)',
+  rose:    'rgba(251,113,133,0.8)',
+  emerald: 'rgba(52,211,153,0.8)',
+  orange:  'rgba(251,146,60,0.8)',
 }
 
 const sidebarVariants = {
@@ -184,10 +189,13 @@ export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
         {/* Divider */}
         <div className="my-5 mx-3" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }} />
 
-        <p className="text-[9px] tracking-[0.3em] uppercase text-white/20 px-3 mb-3">Coming Soon</p>
+        <p className="text-[9px] tracking-[0.3em] uppercase text-white/20 px-3 mb-3">Advanced</p>
         <div className="space-y-1">
           {secondaryNav.map((item, i) => {
             const Icon = item.icon
+            const isActive = currentView === item.view
+            const accentColor = colorMap[item.color]
+
             return (
               <motion.button
                 key={item.id}
@@ -195,22 +203,52 @@ export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
                 variants={itemVariants}
                 initial="hidden"
                 animate="visible"
-                className="relative w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors duration-200 opacity-40 cursor-not-allowed"
-                style={{ border: '1px solid transparent' }}
-                disabled
+                whileHover={{ x: 3, transition: { duration: 0.15 } }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => onViewChange(item.view)}
+                className="relative w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors duration-200 group"
+                style={
+                  isActive
+                    ? {
+                        background: `linear-gradient(135deg, ${accentColor}20 0%, rgba(255,255,255,0.02) 100%)`,
+                        border: `1px solid ${accentColor}35`,
+                        boxShadow: `0 4px 20px ${accentColor}15, inset 0 1px 0 rgba(255,255,255,0.07)`,
+                      }
+                    : { border: '1px solid transparent' }
+                }
               >
-                <Icon className="w-4 h-4 text-white/30 flex-shrink-0" />
-                <span className="text-sm font-medium text-white/30">{item.label}</span>
+                {/* Active left bar */}
+                {isActive && (
+                  <motion.div
+                    layoutId="sidebar-indicator"
+                    className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full"
+                    style={{ background: accentColor, boxShadow: `0 0 8px ${accentColor}` }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                  />
+                )}
+
+                <Icon
+                  className="w-4 h-4 flex-shrink-0 transition-all duration-200"
+                  style={{ color: isActive ? accentColor : 'rgba(255,255,255,0.35)' }}
+                />
                 <span
-                  className="ml-auto text-[9px] tracking-widest uppercase px-1.5 py-0.5 rounded"
+                  className="text-sm font-medium transition-colors duration-200"
                   style={{
-                    background: 'rgba(255,255,255,0.05)',
-                    color: 'rgba(255,255,255,0.25)',
-                    fontFamily: 'JetBrains Mono, monospace',
+                    color: isActive ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.4)',
+                    fontFamily: 'Syne, sans-serif',
                   }}
                 >
-                  Soon
+                  {item.label}
                 </span>
+
+                {/* Hover glow dot */}
+                {!isActive && (
+                  <motion.div
+                    className="absolute right-3 w-1 h-1 rounded-full opacity-0 group-hover:opacity-60"
+                    style={{ background: accentColor }}
+                    transition={{ duration: 0.2 }}
+                  />
+                )}
               </motion.button>
             )
           })}

@@ -24,7 +24,18 @@ Usage::
 """
 
 from __future__ import annotations
+import sys
+import dataclasses
 
+# Python 3.13 ke liye sahi patch
+_original_is_type = dataclasses._is_type
+
+def _patched_is_type(ty, cls, ns, name, _is_kw_only):
+    if ty is None:
+        return False
+    return _original_is_type(ty, cls, ns, name, _is_kw_only)
+
+dataclasses._is_type = _patched_is_type
 import os
 import time
 import threading

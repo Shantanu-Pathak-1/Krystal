@@ -416,6 +416,7 @@ export default function ConfigView() {
   const [hasChanges, setHasChanges] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [open, setOpen] = useState<Record<string, boolean>>({
     database: true,
     vector: true,
@@ -424,6 +425,33 @@ export default function ConfigView() {
     api: false,
     system: false,
   })
+
+  // Load config from localStorage and backend on mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        // First try to load from localStorage
+        const localConfig = localStorage.getItem('krystal_config')
+        if (localConfig) {
+          const parsed = JSON.parse(localConfig)
+          setConfig(prev => ({ ...prev, ...parsed }))
+        }
+        
+        // Then try to fetch from backend
+        const res = await fetch('http://localhost:8000/api/config')
+        if (res.ok) {
+          const data = await res.json()
+          if (data.config) {
+            setConfig(prev => ({ ...prev, ...data.config }))
+          }
+        }
+      } catch (e) {
+        setLoadError('Failed to load configuration from server')
+      }
+    }
+    
+    loadConfig()
+  }, [])
 
   const update = <K extends keyof Config>(key: K, val: Config[K]) => {
     setConfig(prev => ({ ...prev, [key]: val }))
@@ -436,15 +464,40 @@ export default function ConfigView() {
 
   const handleSave = async () => {
     setSaving(true)
-    await new Promise(r => setTimeout(r, 1200)) // Simulate API call
-    setSaving(false)
-    setSaved(true)
-    setHasChanges(false)
-    setTimeout(() => setSaved(false), 3000)
+    setLoadError(null)
+    
+    try {
+      // Save to localStorage
+      localStorage.setItem('krystal_config', JSON.stringify(config))
+      
+      // Save to backend
+      const res = await fetch('http://localhost:8000/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      
+      if (!res.ok) {
+        throw new Error('Failed to save to backend')
+      }
+      
+      setSaving(false)
+      setSaved(true)
+      setHasChanges(false)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (e) {
+      setSaving(false)
+      setLoadError('Failed to save configuration. Changes saved locally only.')
+      // Still mark as saved locally
+      setSaved(true)
+      setHasChanges(false)
+      setTimeout(() => setSaved(false), 3000)
+    }
   }
 
   const handleReset = () => {
     setConfig(DEFAULT_CONFIG)
+    localStorage.removeItem('krystal_config')
     setHasChanges(false)
     setSaved(false)
   }
@@ -613,6 +666,22 @@ export default function ConfigView() {
             >
               <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
               <p className="text-xs text-amber-300/70 font-mono">You have unsaved changes — save before leaving this page.</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Error banner ── */}
+        <AnimatePresence>
+          {loadError && (
+            <motion.div
+              initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+              animate={{ opacity: 1, height: 'auto', marginBottom: 24 }}
+              exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+              className="flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.18)' }}
+            >
+              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+              <p className="text-xs text-red-300/70 font-mono">{loadError}</p>
             </motion.div>
           )}
         </AnimatePresence>

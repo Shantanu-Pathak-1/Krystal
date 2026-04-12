@@ -96,6 +96,62 @@ class LLMProcessor:
         content = response.choices[0].message.content
         return (content or "").strip()
 
+    def generate_response_from_messages(
+        self,
+        messages: list[dict[str, str]],
+    ) -> str:
+        """Generate response from a list of messages (for full conversation context)."""
+        if not messages:
+            return "(No messages to send.)"
+
+        if not self._keys.has_groq_keys():
+            return (
+                "No Groq API keys configured. Add entries to your `.env`, e.g. "
+                "`GROQ_KEY_1`, `GROQ_KEY_2`, ... (see `llm_processor` module docstring)."
+            )
+
+        attempts = max(1, self._keys.groq_key_count)
+        last_rate_limit: RateLimitError | APIStatusError | None = None
+
+        for _ in range(attempts):
+            api_key = self._keys.get_next_groq_key()
+            try:
+                return self._call_groq_with_messages(api_key, messages)
+            except RateLimitError as exc:
+                last_rate_limit = exc
+                continue
+            except APIStatusError as exc:
+                if getattr(exc, "status_code", None) == 429:
+                    last_rate_limit = exc
+                    continue
+                return self._format_error(exc)
+            except GroqError as exc:
+                return self._format_error(exc)
+            except Exception as exc:
+                return f"[LLM error] {type(exc).__name__}: {exc}"
+
+        detail = getattr(last_rate_limit, "message", str(last_rate_limit))
+        return (
+            "All configured Groq keys hit rate limits (or returned 429) for this request. "
+            f"Last error: {detail}"
+        )
+
+    def _call_groq_with_messages(
+        self,
+        api_key: str,
+        messages: list[dict[str, str]],
+    ) -> str:
+        """Internal method to call Groq with pre-formatted messages list."""
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+        )
+        if not response.choices:
+            return ""
+        content = response.choices[0].message.content
+        return (content or "").strip()
+
     @staticmethod
     def _format_error(exc: GroqError) -> str:
         return f"[Groq API error] {type(exc).__name__}: {getattr(exc, 'message', str(exc))}"

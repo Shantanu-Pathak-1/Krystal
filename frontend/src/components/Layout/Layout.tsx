@@ -1,4 +1,3 @@
-import { useNavigate } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import TopNavigation from './TopNavigation'
 import { ViewMode, AutonomyMode } from '../../types'
@@ -18,30 +17,9 @@ export default function Layout({
   autonomyMode,
   setAutonomyMode,
 }: LayoutProps) {
-  const navigate = useNavigate()
-
+  // Direct state update - no React Router navigation
   const handleViewChange = (view: ViewMode) => {
     setCurrentView(view)
-    switch (view) {
-      case 'dashboard':
-        navigate('/dashboard')
-        break
-      case 'main':
-        navigate('/chat')
-        break
-      case 'heartbeat':
-        navigate('/heartbeat')
-        break
-      case 'zen':
-        navigate('/zen')
-        break
-      case 'logs':
-        navigate('/logs')
-        break
-      case 'config':
-        navigate('/config')
-        break
-    }
   }
 
   return (
@@ -60,7 +38,7 @@ export default function Layout({
         />
         
         {/* Dynamic Content Area */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 h-screen overflow-hidden">
           {children}
         </div>
       </div>

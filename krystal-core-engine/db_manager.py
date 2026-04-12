@@ -60,7 +60,7 @@ class MongoManager:
             
         try:
             log_entry = {
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "user_input": user_input,
                 "response": response,
                 "plugin_used": plugin_used,

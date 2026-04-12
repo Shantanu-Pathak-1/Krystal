@@ -45,11 +45,15 @@ def run(query, **kwargs):
         return f"OS control error: {e}"
 
 def _is_media_command(command: str) -> bool:
-    keywords = ['play', 'song', 'music', 'video', 'youtube', 'spotify', 'watch', 'pause', 'stop', 'next', 'previous']
-    return any(keyword in command for keyword in keywords)
+    # Media commands that should use media keys or pywhatkit
+    media_keywords = ['play', 'song', 'music', 'video', 'spotify', 'watch', 'pause', 'stop', 'next', 'previous']
+    # Only treat as media if it's NOT a simple "open youtube" command
+    if 'open youtube' in command or 'launch youtube' in command:
+        return False  # This is a web command, not media playback
+    return any(keyword in command for keyword in media_keywords)
 
 def _is_web_command(command: str) -> bool:
-    keywords = ['open http', 'open www', 'search', 'website', 'url', 'visit', 'google']
+    keywords = ['open http', 'open www', 'search', 'website', 'url', 'visit', 'google', 'open youtube', 'launch youtube', 'go to']
     return any(keyword in command for keyword in keywords)
 
 def _is_app_command(command: str) -> bool:
@@ -61,51 +65,103 @@ def _is_system_command(command: str) -> bool:
     return any(keyword in command for keyword in keywords)
 
 def _handle_media_command(command: str) -> str:
-    # Handle direct pyautogui controls
-    if command in ['pause music', 'play music', 'stop music', 'stop', 'pause', 'rok do', 'band kar do']:
+    # Handle direct pyautogui controls for media keys
+    pause_commands = ['pause music', 'play music', 'stop music', 'stop', 'pause', 'rok do', 'band kar do', 'pause karo', 'band karo']
+    if any(cmd in command for cmd in pause_commands):
         if pyautogui:
             pyautogui.press('playpause')
             return "⏯ Media toggled."
         return "Error: pyautogui not installed."
         
-    if command in ['next song', 'next track', 'next']:
+    next_commands = ['next song', 'next track', 'next', 'agla gaana', 'next gana']
+    if any(cmd in command for cmd in next_commands):
         if pyautogui:
             pyautogui.press('nexttrack')
             return "⏭ Next track."
         return "Error: pyautogui not installed."
 
-    if command in ['previous song', 'prev track', 'previous']:
+    prev_commands = ['previous song', 'prev track', 'previous', 'pichla gaana', 'last song']
+    if any(cmd in command for cmd in prev_commands):
         if pyautogui:
             pyautogui.press('prevtrack')
             return "⏮ Previous track."
         return "Error: pyautogui not installed."
 
-    # Handle YouTube playback
+    # Handle YouTube playback for "play <song>" commands
     if 'play' in command:
         song_part = command.split('play', 1)[1].strip()
-        if pywhatkit:
-            try:
-                pywhatkit.playonyt(song_part)
-                return f"Playing '{song_part}' on YouTube."
-            except Exception as e:
-                return f"YouTube playback error: {e}"
-        else:
-            encoded = urllib.parse.quote(song_part)
-            webbrowser.open(f"https://music.youtube.com/search?q={encoded}")
-            return f"Opened search for '{song_part}'. (Install pywhatkit for auto-play)"
+        if song_part:
+            if pywhatkit:
+                try:
+                    pywhatkit.playonyt(song_part)
+                    return f"▶️ Playing '{song_part}' on YouTube."
+                except Exception as e:
+                    # Fallback to web search
+                    encoded = urllib.parse.quote(song_part)
+                    webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
+                    return f"🔍 Opened YouTube search for '{song_part}'."
+            else:
+                encoded = urllib.parse.quote(song_part)
+                webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
+                return f"🔍 Opened YouTube search for '{song_part}'."
+    
+    # If we get here with 'youtube' but no play command, open youtube.com
+    if 'youtube' in command:
+        webbrowser.open("https://www.youtube.com")
+        return "🌐 Opened YouTube."
             
-    return "Media command processed."
+    return "❓ Media command not recognized."
 
 def _handle_web_command(command: str) -> str:
-    site_part = command.replace('open ', '').replace('search ', '').strip()
+    # Extract the target from commands like "open youtube", "open google", etc.
+    site_part = command
+    
+    # Remove common prefixes
+    for prefix in ['open ', 'launch ', 'go to ', 'search ', 'visit ', 'start ']:
+        if site_part.startswith(prefix):
+            site_part = site_part[len(prefix):].strip()
+            break
+    
+    # Handle specific popular sites
+    site_mappings = {
+        'youtube': 'https://www.youtube.com',
+        'google': 'https://www.google.com',
+        'gmail': 'https://mail.google.com',
+        'facebook': 'https://www.facebook.com',
+        'twitter': 'https://twitter.com',
+        'x': 'https://twitter.com',
+        'instagram': 'https://www.instagram.com',
+        'linkedin': 'https://www.linkedin.com',
+        'github': 'https://github.com',
+        'netflix': 'https://www.netflix.com',
+        'amazon': 'https://www.amazon.com',
+        'reddit': 'https://www.reddit.com',
+        'spotify': 'https://open.spotify.com',
+        'wikipedia': 'https://www.wikipedia.org',
+    }
+    
+    # Check if it's a known site
+    if site_part.lower() in site_mappings:
+        url = site_mappings[site_part.lower()]
+        webbrowser.open(url)
+        return f"🌐 Opened {site_part.title()}."
+    
+    # Check for URL format
     if not site_part.startswith("http"):
         if "." in site_part and " " not in site_part:
-            site_part = "https://" + site_part
+            # Looks like a domain
+            if not site_part.startswith("www."):
+                site_part = "www." + site_part
+            url = "https://" + site_part
         else:
+            # Treat as search query
             encoded = urllib.parse.quote(site_part)
-            site_part = f"https://www.google.com/search?q={encoded}"
-    webbrowser.open(site_part)
-    return f"Opened: {site_part}"
+            url = f"https://www.google.com/search?q={encoded}"
+    else:
+        url = site_part
+    
+    webbrowser.open(url)
+    return f"🌐 Opened: {url}"
 
 def _handle_app_command(command: str) -> str:
     app_part = command.replace('open ', '').replace('launch ', '').strip()
@@ -121,17 +177,36 @@ def _handle_app_command(command: str) -> str:
         'task manager': 'taskmgr.exe',
         'chrome': 'chrome.exe',
         'edge': 'msedge.exe',
+        'firefox': 'firefox.exe',
         'word': 'winword.exe',
         'excel': 'excel.exe',
-        'powerpoint': 'powerpnt.exe'
+        'powerpoint': 'powerpnt.exe',
+        'vscode': 'code.exe',
+        'code': 'code.exe',
+        'spotify': 'spotify.exe',
+        'discord': 'discord.exe',
+        'steam': 'steam.exe',
     }
     
-    executable = app_mappings.get(app_part, app_part)
+    # Normalize the app name
+    app_key = app_part.lower().replace('.exe', '')
+    executable = app_mappings.get(app_key, app_part)
+    
     try:
-        subprocess.Popen(executable, shell=True)
-        return f"Launched application: {app_part}"
+        # Try to launch the application
+        if executable.endswith('.exe'):
+            subprocess.Popen(executable, shell=True)
+        else:
+            # Try as a command (might be on PATH)
+            subprocess.Popen(executable, shell=True)
+        return f"🚀 Launched: {app_part.title()}"
     except Exception as e:
-        return f"Could not launch '{app_part}'. Make sure it's installed."
+        # Fallback: try opening as if it's a file/program path
+        try:
+            os.startfile(executable)
+            return f"🚀 Launched: {app_part.title()}"
+        except:
+            return f"❌ Could not launch '{app_part}'. Make sure it's installed."
 
 def _handle_system_command(command: str) -> str:
     if 'lock' in command:

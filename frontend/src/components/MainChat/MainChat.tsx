@@ -1,6 +1,42 @@
-import React, { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Mic, MicOff, Sparkles, User, Copy, Check } from 'lucide-react'
+import { Send, Mic, MicOff, Sparkles, User, Copy, Check, Volume2, VolumeX } from 'lucide-react'
+import { useAutonomy } from '../../context/AutonomyContext'
+
+// Global state for selected model
+let globalSelectedModel: string | null = null
+
+// SpeechRecognition types
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList
+  resultIndex: number
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean
+  interimResults: boolean
+  lang: string
+  onresult: ((event: SpeechRecognitionEvent) => void) | null
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
+  onend: (() => void) | null
+  start(): void
+  stop(): void
+}
+
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognition
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: SpeechRecognitionConstructor
+    webkitSpeechRecognition: SpeechRecognitionConstructor
+  }
+}
 
 interface Message {
   id: string
@@ -146,12 +182,41 @@ function TypingIndicator() {
 }
 
 export default function MainChat() {
+  const { autonomyMode } = useAutonomy()
   const [messages, setMessages] = useState<Message[]>([])
   const [inputValue, setInputValue] = useState('')
   const [isRecording, setIsRecording] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [ttsEnabled, setTtsEnabled] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const recognitionRef = useRef<SpeechRecognition | null>(null)
+  const lockedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
+  const lastSpokenMessageIdRef = useRef<string | null>(null)
+
+  // Load chat history on mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/chat/history')
+        if (res.ok) {
+          const data = await res.json()
+          if (data.messages && Array.isArray(data.messages)) {
+            const historyMessages: Message[] = data.messages.map((msg: any) => ({
+              id: msg.id || Date.now().toString(),
+              type: msg.type as 'user' | 'assistant',
+              content: msg.content,
+              timestamp: new Date(msg.timestamp || Date.now()),
+            }))
+            setMessages(historyMessages)
+          }
+        }
+      } catch {
+        // Silent fail - app works without history
+      }
+    }
+    loadHistory()
+  }, [])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -171,10 +236,18 @@ export default function MainChat() {
     setIsLoading(true)
 
     try {
+      // Map autonomy mode to backend format (capitalize first letter)
+      const modeMap: Record<string, string> = {
+        safe: 'Safe',
+        agentic: 'Agentic',
+        god: 'God Mode'
+      }
+      const mode = modeMap[autonomyMode] || 'Agentic'
+
       const res = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg.content }),
+        body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
       })
       const data = await res.json()
       const assistantMsg: Message = {
@@ -184,6 +257,7 @@ export default function MainChat() {
         timestamp: new Date(),
       }
       setMessages(prev => [...prev, assistantMsg])
+      // TTS is handled by useEffect above to prevent double-firing
     } catch {
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -199,6 +273,219 @@ export default function MainChat() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+  }
+
+  // Robust voice selection function - locks voice in ref
+  const selectAndLockVoice = useCallback(() => {
+    if (lockedVoiceRef.current) return lockedVoiceRef.current
+    if (!('speechSynthesis' in window)) return null
+    
+    const voices = window.speechSynthesis.getVoices()
+    if (voices.length === 0) return null
+    
+    // Priority order for voice selection
+    const preferredVoiceNames = [
+      'Google UK English Female',
+      'Microsoft Zira',
+      'Microsoft Zira - English (United States)',
+      'Samantha',
+      'Google US English',
+      'Google UK English'
+    ]
+    
+    // Try exact matches first
+    for (const name of preferredVoiceNames) {
+      const voice = voices.find(v => v.name === name)
+      if (voice) {
+        lockedVoiceRef.current = voice
+        return voice
+      }
+    }
+    
+    // Fallback: first en-US or en-GB female voice
+    const femaleVoice = voices.find(v => 
+      (v.lang.startsWith('en-US') || v.lang.startsWith('en-GB')) &&
+      (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('samantha'))
+    )
+    if (femaleVoice) {
+      lockedVoiceRef.current = femaleVoice
+      return femaleVoice
+    }
+    
+    // Final fallback: any en-US voice
+    const usVoice = voices.find(v => v.lang.startsWith('en-US'))
+    if (usVoice) {
+      lockedVoiceRef.current = usVoice
+      return usVoice
+    }
+    
+    // Last resort: first available voice
+    lockedVoiceRef.current = voices[0]
+    return voices[0]
+  }, [])
+
+  // Initialize speech synthesis voices
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      // Load voices (needed for some browsers)
+      const voices = window.speechSynthesis.getVoices()
+      if (voices.length > 0) {
+        selectAndLockVoice()
+      }
+      
+      // Some browsers load voices asynchronously
+      if ('onvoiceschanged' in window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          selectAndLockVoice()
+        }
+      }
+    }
+  }, [selectAndLockVoice])
+
+  // Text-to-speech effect - only speaks when new assistant message arrives
+  useEffect(() => {
+    if (!ttsEnabled || !('speechSynthesis' in window)) return
+    
+    // Find the last assistant message
+    const lastAssistantMessage = [...messages].reverse().find(m => m.type === 'assistant')
+    if (!lastAssistantMessage) return
+    
+    // Prevent double-firing: only speak if we haven't spoken this message ID
+    if (lastAssistantMessage.id === lastSpokenMessageIdRef.current) return
+    lastSpokenMessageIdRef.current = lastAssistantMessage.id
+    
+    // Cancel any ongoing speech before speaking
+    window.speechSynthesis.cancel()
+    
+    const utterance = new SpeechSynthesisUtterance(lastAssistantMessage.content)
+    utterance.rate = 1
+    utterance.pitch = 1
+    utterance.volume = 1
+    
+    // Use locked voice
+    const voice = selectAndLockVoice()
+    if (voice) {
+      utterance.voice = voice
+    }
+    
+    window.speechSynthesis.speak(utterance)
+  }, [messages, ttsEnabled, selectAndLockVoice])
+
+  // Speech recognition setup
+  useEffect(() => {
+    if (!('SpeechRecognition' in window) && !('webkitSpeechRecognition' in window)) {
+      return
+    }
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = 'en-US'
+    
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let finalTranscript = ''
+      let interimTranscript = ''
+      
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript
+        } else {
+          interimTranscript += transcript
+        }
+      }
+      
+      if (finalTranscript) {
+        setInputValue(finalTranscript)
+        // Auto-send when speech is finalized
+        setTimeout(() => {
+          setIsRecording(false)
+          handleSendWithText(finalTranscript)
+        }, 500)
+      } else if (interimTranscript) {
+        setInputValue(interimTranscript)
+      }
+    }
+    
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      console.error('Speech recognition error:', event.error)
+      setIsRecording(false)
+    }
+    
+    recognition.onend = () => {
+      setIsRecording(false)
+    }
+    
+    recognitionRef.current = recognition
+  }, [])
+
+  // Handle send with specific text (for voice input)
+  const handleSendWithText = async (text: string) => {
+    if (!text.trim() || isLoading) return
+
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      type: 'user',
+      content: text.trim(),
+      timestamp: new Date(),
+    }
+    setMessages(prev => [...prev, userMsg])
+    setInputValue('')
+    setIsLoading(true)
+
+    try {
+      const modeMap: Record<string, string> = {
+        safe: 'Safe',
+        agentic: 'Agentic',
+        god: 'God Mode'
+      }
+      const mode = modeMap[autonomyMode] || 'Agentic'
+
+      const res = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
+      })
+      const data = await res.json()
+      const assistantMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        type: 'assistant',
+        content: data.response || 'Response received.',
+        timestamp: new Date(),
+      }
+      setMessages(prev => [...prev, assistantMsg])
+      // TTS is handled by useEffect above to prevent double-firing
+    } catch {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        type: 'assistant',
+        content: '⚠️ Unable to reach Krystal Engine. Is the backend running on port 8000?',
+        timestamp: new Date(),
+      }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Toggle speech recognition
+  const toggleRecording = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser')
+      return
+    }
+    
+    if (isRecording) {
+      recognitionRef.current.stop()
+      setIsRecording(false)
+    } else {
+      try {
+        recognitionRef.current.start()
+        setIsRecording(true)
+      } catch (err) {
+        console.error('Failed to start recording:', err)
+      }
+    }
   }
 
   // Auto-resize textarea
@@ -335,7 +622,7 @@ export default function MainChat() {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.93 }}
-              onClick={() => setIsRecording(r => !r)}
+              onClick={toggleRecording}
               className="flex-shrink-0 p-3 rounded-xl transition-all duration-200"
               style={
                 isRecording
@@ -347,6 +634,22 @@ export default function MainChat() {
                 ? <MicOff className="w-5 h-5" />
                 : <Mic className="w-5 h-5" />
               }
+            </motion.button>
+
+            {/* TTS toggle */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.93 }}
+              onClick={() => setTtsEnabled(e => !e)}
+              className="flex-shrink-0 p-3 rounded-xl transition-all duration-200"
+              style={
+                ttsEnabled
+                  ? { background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)', color: '#a78bfa' }
+                  : { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.35)' }
+              }
+              title={ttsEnabled ? 'Text-to-speech on' : 'Text-to-speech off'}
+            >
+              {ttsEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
             </motion.button>
 
             {/* Textarea */}
