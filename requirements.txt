@@ -13,6 +13,6 @@ pywhatkit>=0.6.0
 pyautogui>=0.9.54
 pycaw>=2023.3
 comtypes>=1.2.0
-The Pinecone library was recently renamed. 
-1. Update `requirements.txt`: Change `pinecone-client` to just `pinecone`.
-2. Ensure there are no other references to `pinecone-client` in the codebase.
+yfinance>=0.2.28
+pandas>=2.0.0
+numpy>=1.24.0

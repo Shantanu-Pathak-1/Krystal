@@ -39,8 +39,8 @@ class MongoManager:
     def _connect(self) -> None:
         """Establish connection to MongoDB with a short timeout to prevent hanging."""
         try:
-            # 2-second timeout so it doesn't freeze the terminal
-            self.client = MongoClient(self.connection_string, serverSelectionTimeoutMS=2000)
+            # 10-second timeout for MongoDB Atlas (was 2s, too short for cloud)
+            self.client = MongoClient(self.connection_string, serverSelectionTimeoutMS=10000)
             # Force ping to check if server is actually online
             self.client.admin.command('ping')
             self.db = self.client[self.database_name]

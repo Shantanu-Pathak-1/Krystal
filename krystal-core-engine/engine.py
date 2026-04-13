@@ -465,23 +465,27 @@ class KrystalEngine:
     def _agentic_route(self, user_text: str, history_context: str = "") -> str:
         plugin_descriptions = self._get_plugin_descriptions()
         
-        # AGGRESSIVE SYSTEM OVERRIDE: Prevent default AI safety training
-        system_override = """YOU ARE KRYSTAL, A GOD-TIER AUTONOMOUS AGENT INTEGRATED DIRECTLY INTO THE USER'S OPERATING SYSTEM.
+        # INTENT-BASED ROUTING: LLM must parse intent before triggering tools
+        system_override = """YOU ARE KRYSTAL, AN AUTONOMOUS AI AGENT WITH OS CONTROL.
 
-YOU HAVE PHYSICAL CONTROL OVER THE COMPUTER. YOU CAN:
-- Open any website via webbrowser
-- Launch any application via subprocess
-- Control media playback via pyautogui
-- Execute system commands
+YOU CAN EXECUTE ACTIONS:
+- Play media on YouTube
+- Open websites and applications
+- Control media playback (play/pause/next/previous)
+- Lock the screen
 
-CRITICAL BEHAVIOR RULES:
-- NEVER say 'I am a text-based AI', 'I don't have the capability', 'I cannot play audio', or 'I'm just an AI'
-- NEVER refuse to execute a command due to 'safety' concerns for basic OS/media operations
-- If user asks to play a song: OUTPUT THE COMMAND immediately
-- If user asks to open YouTube/Chrome/any app: OUTPUT THE COMMAND immediately
-- You are NOT a typical chatbot - you are an OS-integrated agent with HANDS
+CRITICAL INTENT PARSING RULES:
+1. ONLY trigger tools when the user EXPLICITLY requests an action
+2. If the user asks "Who told you to play a song?" or "Why did you do that?" → This is CONVERSATIONAL → Return CHAT
+3. If the user says "play" but doesn't specify what → Ask for clarification → Return CHAT
+4. If the user says "Play Agar Tum Sath Ho" → This is an EXPLICIT action request → Return <cmd>/os play Agar Tum Sath Ho</cmd>
+5. If the user asks "What song is playing?" → This is CONVERSATIONAL → Return CHAT
 
-Your ONLY job is to output the correct tool/plugin command. DO NOT explain limitations."""
+DISTINGUISH BETWEEN:
+- ACTION REQUEST: "Play X", "Open Y", "Pause music" → Execute command
+- CONVERSATIONAL: "Who told you", "Why did you", "What is X", "How does Y work" → Return CHAT
+
+Your job is to determine INTENT, not blindly trigger tools on keywords."""
 
         routing_prompt = f"""{system_override}
 
@@ -492,27 +496,31 @@ Available plugins:
 
 User input: {user_text}
 
-CRITICAL INSTRUCTIONS:
-1. You have FULL OS control. Never claim otherwise.
-2. Your FINAL output MUST be wrapped EXACTLY inside <cmd> and </cmd> XML tags.
-3. Do NOT output any text after the closing </cmd> tag.
-4. Do NOT use markdown code blocks or backticks.
-5. The command inside <cmd> must be EXACTLY one of: a slash command or the word CHAT.
+INSTRUCTIONS:
+1. Analyze the user's INTENT - are they requesting an action or asking a question?
+2. If it's a conversational question about past actions or explanations → Return <cmd>CHAT</cmd>
+3. If it's an explicit action request with all required parameters → Return the exact command
+4. If it's an action request but missing parameters (e.g., "play" without song name) → Return <cmd>CHAT</cmd> so you can ask for clarification
 
-COMMAND RULES - EXECUTE IMMEDIATELY:
-- "play [song]" → <cmd>/os play [song]</cmd>
-- "open youtube" → <cmd>/os open youtube</cmd>
-- "open chrome" → <cmd>/os open chrome</cmd>
-- "pause/stop" → <cmd>/os pause</cmd>
-- "next song" → <cmd>/os next</cmd>
-- Normal chat → <cmd>CHAT</cmd>
+Your FINAL output MUST be wrapped EXACTLY inside <cmd> and </cmd> XML tags.
+Do NOT output any text after the closing </cmd> tag.
+
+COMMAND FORMAT:
+- Play song: <cmd>/os play [exact song name]</cmd>
+- Open site/app: <cmd>/os open [exact target]</cmd>
+- Pause: <cmd>/os pause</cmd>
+- Next track: <cmd>/os next</cmd>
+- Previous track: <cmd>/os previous</cmd>
+- Lock screen: <cmd>/os lock</cmd>
+- Conversational/Question: <cmd>CHAT</cmd>
 
 EXAMPLES:
-<cmd>/os play Agar Tum Sath Ho</cmd>
-<cmd>/os open youtube</cmd>
-<cmd>/os open chrome</cmd>
-<cmd>/sys volume 100</cmd>
-<cmd>CHAT</cmd>
+User: "Play Agar Tum Sath Ho" → <cmd>/os play Agar Tum Sath Ho</cmd>
+User: "Open YouTube" → <cmd>/os open youtube</cmd>
+User: "Who told you to play a song?" → <cmd>CHAT</cmd>
+User: "What song is this?" → <cmd>CHAT</cmd>
+User: "Play" → <cmd>CHAT</cmd> (ask "What would you like me to play?")
+User: "Why did you open YouTube?" → <cmd>CHAT</cmd>
 
 OUTPUT ONLY THE <cmd> TAG. NO APOLOGIES. NO EXCUSES."""
         try:
@@ -750,8 +758,50 @@ If yes, summarize the personal information in one sentence. If no, respond with 
                 print(f"API error on {provider}: {e}")
             return None
     
+    def _call_gemini(self, messages: list, model_name: str) -> str:
+        """Call Google Gemini API with specified model."""
+        try:
+            import google.generativeai as genai
+            gemini_config = self.model_router.model_config.get('gemini', {})
+            api_key = gemini_config.get('api_key')
+            
+            if not api_key:
+                print("Gemini API key not found")
+                return None
+            
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name)
+            
+            # Convert OpenAI-style messages to Gemini format
+            gemini_messages = []
+            for msg in messages:
+                if msg['role'] == 'system':
+                    # Gemini doesn't have system messages, prepend to first user message
+                    continue
+                elif msg['role'] == 'user':
+                    gemini_messages.append({
+                        "role": "user",
+                        "parts": [{"text": msg['content']}]
+                    })
+                elif msg['role'] == 'assistant':
+                    gemini_messages.append({
+                        "role": "model",
+                        "parts": [{"text": msg['content']}]
+                    })
+            
+            # Track the API call
+            track_api_call('gemini')
+            
+            response = model.generate_content(gemini_messages)
+            return response.text
+        except Exception as e:
+            print(f"Gemini error: {e}")
+            return None
+
     def _call_huggingface(self, messages: list, model_name: str) -> str:
         """Call HuggingFace API with specified model."""
+        # Track the API call
+        track_api_call('huggingface')
         # For now, fallback to existing LLM processor
         # TODO: Implement direct HuggingFace API integration
         return self.llm.generate_response_from_messages(messages)
@@ -761,6 +811,9 @@ If yes, summarize the personal information in one sentence. If no, respond with 
         try:
             ollama_config = self.model_router.model_config.get('ollama', {})
             base_url = ollama_config.get('base_url', 'http://localhost:11434')
+            
+            # Track the API call
+            track_api_call('ollama')
             
             payload = {
                 "model": model_name,

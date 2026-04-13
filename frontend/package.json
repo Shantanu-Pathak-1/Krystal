@@ -15,10 +15,12 @@
     "@react-three/fiber": "^8.15.12",
     "clsx": "^2.0.0",
     "framer-motion": "^10.18.0",
+    "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
+    "react-ts-tradingview-widgets": "^1.2.8",
     "three": "^0.183.2",
     "three-mesh-bvh": "^0.8.0"
   },

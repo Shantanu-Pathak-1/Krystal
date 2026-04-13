@@ -10,10 +10,11 @@ import MemoryVaultView from './components/MemoryVault/MemoryVaultView'
 import DiaryView from './components/Diary/DiaryView'
 import SecurityView from './components/Security/SecurityView'
 import PluginsLabView from './components/PluginsLab/PluginsLabView'
-import ApiDashboardView from './components/ApiDashboard/ApiDashboardView'
+import ApiDashboardView from './views/ApiDashboardView'
+import TradingView from './views/TradingView'
 import { AutonomyProvider } from './context/AutonomyContext'
 
-type ViewMode = 'main' | 'heartbeat' | 'zen' | 'dashboard' | 'logs' | 'config' | 'memory' | 'diary' | 'security' | 'plugins' | 'api'
+type ViewMode = 'main' | 'heartbeat' | 'zen' | 'dashboard' | 'logs' | 'config' | 'memory' | 'diary' | 'security' | 'plugins' | 'api' | 'trading'
 type AutonomyMode = 'safe' | 'agentic' | 'god'
 
 export default function App() {
@@ -45,6 +46,8 @@ export default function App() {
         return <PluginsLabView key="plugins" />
       case 'api':
         return <ApiDashboardView key="api" />
+      case 'trading':
+        return <TradingView key="trading" />
       default:
         return <DashboardView key="dashboard" />
     }

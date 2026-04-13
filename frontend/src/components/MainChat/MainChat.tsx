@@ -249,11 +249,16 @@ export default function MainChat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
       })
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
+      
       const data = await res.json()
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: data.response || 'Response received.',
+        content: data.response,
         timestamp: new Date(),
       }
       setMessages(prev => [...prev, assistantMsg])
@@ -447,11 +452,16 @@ export default function MainChat() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
       })
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      }
+      
       const data = await res.json()
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: data.response || 'Response received.',
+        content: data.response,
         timestamp: new Date(),
       }
       setMessages(prev => [...prev, assistantMsg])

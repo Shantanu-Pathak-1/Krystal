@@ -26,10 +26,15 @@ sys.path.insert(0, str(engine_path))
 try:
     from engine import KrystalEngine
     from usage_tracker import get_usage_tracker
+    from trading_engine import TradingEngine
 except ImportError as e:
     print(f"Warning: KrystalEngine not found: {e}")
     KrystalEngine = None
     get_usage_tracker = None
+    TradingEngine = None
+
+# FCS API Configuration (Get your key from fcsapi.com)
+FCS_ACCESS_KEY = os.getenv('FCS_ACCESS_KEY', 'BVGHjh9OYuSepRy0FgYY4CAre')
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -58,6 +63,15 @@ if KrystalEngine is not None:
         print("✅ Krystal Engine initialized successfully")
     except Exception as e:
         print(f"⚠️  Error initializing Krystal Engine: {e}")
+
+# Initialize Trading Engine
+trading_engine = None
+if TradingEngine is not None:
+    try:
+        trading_engine = TradingEngine()
+        print("✅ Trading Engine initialized successfully")
+    except Exception as e:
+        print(f"⚠️  Error initializing Trading Engine: {e}")
 
 # Request counter (in-memory, resets on restart)
 _request_count = 0
@@ -589,7 +603,7 @@ async def health_check():
 
 # In-memory config store (for frontend settings)
 _config_store: Dict[str, Any] = {
-    "mongodb_uri": "mongodb://localhost:27017/krystal",
+    "mongodb_uri": os.getenv('MONGODB_URI', 'mongodb://localhost:27017/krystal'),
     "pinecone_api_key": "",
     "pinecone_environment": "us-west1-gcp",
     "pinecone_index": "krystal-memory",
@@ -635,8 +649,151 @@ async def update_config(request: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"Error updating config: {str(e)}")
 
 
+@app.post("/api/trading/execute")
+async def execute_trade(approved: bool):
+    try:
+        if trading_engine:
+            # Check if system is shut down
+            is_safe, message = trading_engine.check_risk_limit()
+            if not is_safe:
+                return {"success": False, "message": message, "shutdown": True}
+            
+            result = trading_engine.execute_trade(approved)
+            return {"success": True, "result": result}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/trading/risk-settings")
+async def update_risk_settings(daily_loss_limit: float, target_profit: float):
+    try:
+        if trading_engine:
+            trading_engine.update_risk_settings(daily_loss_limit, target_profit)
+            return {"success": True, "message": "Risk settings updated"}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/trading/paper-trade")
+async def execute_paper_trade(symbol: str, action: str, amount: float, price: float):
+    try:
+        if trading_engine:
+            result = trading_engine.execute_paper_trade(symbol, action, amount, price)
+            return result
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/trading/evaluate-trades")
+async def evaluate_trades():
+    try:
+        if trading_engine:
+            trading_engine.evaluate_paper_trades()
+            return {"success": True, "message": "Trades evaluated"}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/trading/agent-status")
+async def get_agent_status():
+    """Get current status of AI agents"""
+    try:
+        if trading_engine:
+            status = trading_engine.get_agent_status()
+            return {"success": True, "status": status}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/trading/toggle-groq")
+async def toggle_groq(enabled: bool):
+    """Toggle Groq agent on/off"""
+    try:
+        if trading_engine:
+            trading_engine.toggle_groq(enabled)
+            return {"success": True, "message": f"Groq agent {'enabled' if enabled else 'disabled'}"}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/trading/toggle-gemini")
+async def toggle_gemini(enabled: bool):
+    """Toggle Gemini agent on/off"""
+    try:
+        if trading_engine:
+            trading_engine.toggle_gemini(enabled)
+            return {"success": True, "message": f"Gemini agent {'enabled' if enabled else 'disabled'}"}
+        return {"success": False, "message": "Trading engine not initialized"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/trading/status")
+async def get_trading_status(mode: str = "simulated", symbol: str = "EUR/USD"):
+    """Get current trading status including market data and agent analyses."""
+    if not trading_engine:
+        return {"error": "Trading engine not initialized"}
+    
+    try:
+        # Pass the mode and symbol to the engine
+        await trading_engine.fetch_market_data_for_mode(mode, symbol)
+        
+        # Run analysis for the requested symbol
+        await trading_engine.analyze_trade(symbol)
+        
+        # Generate trade signal
+        trading_engine.generate_trade_signal(symbol)
+        
+        # Return status with the current mode
+        status = trading_engine.get_status()
+        status['mode'] = mode
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching trading status: {str(e)}")
+
+
+@app.post("/api/trading/execute")
+async def execute_trade(request: Dict[str, Any]):
+    """Execute or reject a pending trade."""
+    if not trading_engine:
+        raise HTTPException(status_code=503, detail="Trading engine not initialized")
+    
+    approved = request.get("approved", False)
+    
+    try:
+        result = await trading_engine.execute_trade(approved)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error executing trade: {str(e)}")
+
+
+@app.get("/api/trading/ohlc")
+async def get_ohlc_data(symbol: str = "EUR/USD", limit: int = 100):
+    """Get OHLC (Open, High, Low, Close) data for the chart."""
+    if not trading_engine:
+        return {"error": "Trading engine not initialized"}
+    
+    try:
+        ohlc_data = trading_engine.get_ohlc_data(symbol, limit)
+        return {"symbol": symbol, "data": ohlc_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching OHLC data: {str(e)}")
+
+
+@app.get("/api/trading/position-size")
+async def get_position_size(symbol: str = "EUR/USD", risk_percentage: float = 1.0):
+    """Calculate position size based on risk percentage."""
+    if not trading_engine:
+        return {"error": "Trading engine not initialized"}
+    
+    try:
+        position_data = trading_engine.calculate_position_size(symbol, risk_percentage)
+        return position_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calculating position size: {str(e)}")
+
+
 if __name__ == "__main__":
     print("🔮 Starting Krystal AI API Server...")
     print("📡 API:      http://localhost:8000")
     print("🖥️  Frontend: http://localhost:5173")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=False, log_level="info")

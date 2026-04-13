@@ -23,105 +23,83 @@ DESCRIPTION = "Controls the local operating system, launches local apps, and ope
 
 def run(query, **kwargs):
     _ = kwargs
-    command = query.strip().lower()
+    command = query.strip()
     
     if not command:
         return "Error: Please provide an OS command."
     
     try:
-        if _is_media_command(command):
-            return _handle_media_command(command)
-        elif _is_web_command(command):
-            return _handle_web_command(command)
-        elif _is_app_command(command):
-            return _handle_app_command(command)
-        elif _is_system_command(command):
-            return _handle_system_command(command)
-        else:
-            # Fallback app launch check
-            return _handle_app_command(f"open {command}")
-            
+        # Execute exact command passed by LLM - no keyword matching
+        # The LLM should format commands as: "/os play <song>" or "/os open <app>"
+        return _execute_command(command)
     except Exception as e:
         return f"OS control error: {e}"
 
-def _is_media_command(command: str) -> bool:
-    # Media commands that should use media keys or pywhatkit
-    media_keywords = ['play', 'song', 'music', 'video', 'spotify', 'watch', 'pause', 'stop', 'next', 'previous']
-    # Only treat as media if it's NOT a simple "open youtube" command
-    if 'open youtube' in command or 'launch youtube' in command:
-        return False  # This is a web command, not media playback
-    return any(keyword in command for keyword in media_keywords)
-
-def _is_web_command(command: str) -> bool:
-    keywords = ['open http', 'open www', 'search', 'website', 'url', 'visit', 'google', 'open youtube', 'launch youtube', 'go to']
-    return any(keyword in command for keyword in keywords)
-
-def _is_app_command(command: str) -> bool:
-    keywords = ['open', 'launch', 'start', 'run']
-    return any(keyword in command for keyword in keywords)
-
-def _is_system_command(command: str) -> bool:
-    keywords = ['shutdown', 'restart', 'sleep', 'lock']
-    return any(keyword in command for keyword in keywords)
-
-def _handle_media_command(command: str) -> str:
-    # Handle direct pyautogui controls for media keys
-    pause_commands = ['pause music', 'play music', 'stop music', 'stop', 'pause', 'rok do', 'band kar do', 'pause karo', 'band karo']
-    if any(cmd in command for cmd in pause_commands):
-        if pyautogui:
-            pyautogui.press('playpause')
-            return "⏯ Media toggled."
-        return "Error: pyautogui not installed."
-        
-    next_commands = ['next song', 'next track', 'next', 'agla gaana', 'next gana']
-    if any(cmd in command for cmd in next_commands):
-        if pyautogui:
-            pyautogui.press('nexttrack')
-            return "⏭ Next track."
-        return "Error: pyautogui not installed."
-
-    prev_commands = ['previous song', 'prev track', 'previous', 'pichla gaana', 'last song']
-    if any(cmd in command for cmd in prev_commands):
-        if pyautogui:
-            pyautogui.press('prevtrack')
-            return "⏮ Previous track."
-        return "Error: pyautogui not installed."
-
-    # Handle YouTube playback for "play <song>" commands
-    if 'play' in command:
-        song_part = command.split('play', 1)[1].strip()
-        if song_part:
-            if pywhatkit:
-                try:
-                    pywhatkit.playonyt(song_part)
-                    return f"▶️ Playing '{song_part}' on YouTube."
-                except Exception as e:
-                    # Fallback to web search
-                    encoded = urllib.parse.quote(song_part)
-                    webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
-                    return f"🔍 Opened YouTube search for '{song_part}'."
-            else:
-                encoded = urllib.parse.quote(song_part)
-                webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
-                return f"🔍 Opened YouTube search for '{song_part}'."
+def _execute_command(command: str) -> str:
+    # Parse the command - LLM should have already decided the action
+    parts = command.split(maxsplit=1)
+    action = parts[0].lower() if parts else ""
+    args = parts[1].strip() if len(parts) > 1 else ""
     
-    # If we get here with 'youtube' but no play command, open youtube.com
-    if 'youtube' in command:
-        webbrowser.open("https://www.youtube.com")
-        return "🌐 Opened YouTube."
-            
-    return "❓ Media command not recognized."
+    if action == 'play' and args:
+        return _play_media(args)
+    elif action == 'pause':
+        return _pause_media()
+    elif action == 'next':
+        return _next_track()
+    elif action == 'previous':
+        return _previous_track()
+    elif action == 'open' and args:
+        return _open_target(args)
+    elif action == 'search' and args:
+        return _search_web(args)
+    elif action == 'lock':
+        return _lock_screen()
+    else:
+        return f"❓ Unknown command: {action}. Please specify an action like 'play', 'open', 'search', etc."
 
-def _handle_web_command(command: str) -> str:
-    # Extract the target from commands like "open youtube", "open google", etc.
-    site_part = command
+def _play_media(query: str) -> str:
+    """Play media on YouTube - requires exact song name from LLM"""
+    if not query:
+        return "❓ Please specify what to play. Example: 'play Bohemian Rhapsody'"
     
-    # Remove common prefixes
-    for prefix in ['open ', 'launch ', 'go to ', 'search ', 'visit ', 'start ']:
-        if site_part.startswith(prefix):
-            site_part = site_part[len(prefix):].strip()
-            break
-    
+    if pywhatkit:
+        try:
+            pywhatkit.playonyt(query)
+            return f"▶️ Playing '{query}' on YouTube."
+        except Exception as e:
+            # Fallback to web search
+            encoded = urllib.parse.quote(query)
+            webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
+            return f"🔍 Opened YouTube search for '{query}'."
+    else:
+        encoded = urllib.parse.quote(query)
+        webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
+        return f"🔍 Opened YouTube search for '{query}'."
+
+def _pause_media() -> str:
+    """Toggle media playback"""
+    if pyautogui:
+        pyautogui.press('playpause')
+        return "⏯ Media toggled."
+    return "Error: pyautogui not installed."
+
+def _next_track() -> str:
+    """Skip to next track"""
+    if pyautogui:
+        pyautogui.press('nexttrack')
+        return "⏭ Next track."
+    return "Error: pyautogui not installed."
+
+def _previous_track() -> str:
+    """Go to previous track"""
+    if pyautogui:
+        pyautogui.press('prevtrack')
+        return "⏮ Previous track."
+    return "Error: pyautogui not installed."
+
+def _open_target(target: str) -> str:
+    """Open a website or application - requires exact target from LLM"""
     # Handle specific popular sites
     site_mappings = {
         'youtube': 'https://www.youtube.com',
@@ -141,75 +119,36 @@ def _handle_web_command(command: str) -> str:
     }
     
     # Check if it's a known site
-    if site_part.lower() in site_mappings:
-        url = site_mappings[site_part.lower()]
+    target_lower = target.lower()
+    if target_lower in site_mappings:
+        url = site_mappings[target_lower]
         webbrowser.open(url)
-        return f"🌐 Opened {site_part.title()}."
+        return f"🌐 Opened {target.title()}."
     
     # Check for URL format
-    if not site_part.startswith("http"):
-        if "." in site_part and " " not in site_part:
-            # Looks like a domain
-            if not site_part.startswith("www."):
-                site_part = "www." + site_part
-            url = "https://" + site_part
-        else:
-            # Treat as search query
-            encoded = urllib.parse.quote(site_part)
-            url = f"https://www.google.com/search?q={encoded}"
+    if target.startswith("http"):
+        url = target
+    elif "." in target and " " not in target:
+        # Looks like a domain
+        if not target.startswith("www."):
+            target = "www." + target
+        url = "https://" + target
     else:
-        url = site_part
+        # Treat as search query
+        encoded = urllib.parse.quote(target)
+        url = f"https://www.google.com/search?q={encoded}"
     
     webbrowser.open(url)
     return f"🌐 Opened: {url}"
 
-def _handle_app_command(command: str) -> str:
-    app_part = command.replace('open ', '').replace('launch ', '').strip()
-    
-    app_mappings = {
-        'notepad': 'notepad.exe',
-        'calculator': 'calc.exe',
-        'calc': 'calc.exe',
-        'paint': 'mspaint.exe',
-        'cmd': 'cmd.exe',
-        'terminal': 'cmd.exe',
-        'explorer': 'explorer.exe',
-        'task manager': 'taskmgr.exe',
-        'chrome': 'chrome.exe',
-        'edge': 'msedge.exe',
-        'firefox': 'firefox.exe',
-        'word': 'winword.exe',
-        'excel': 'excel.exe',
-        'powerpoint': 'powerpnt.exe',
-        'vscode': 'code.exe',
-        'code': 'code.exe',
-        'spotify': 'spotify.exe',
-        'discord': 'discord.exe',
-        'steam': 'steam.exe',
-    }
-    
-    # Normalize the app name
-    app_key = app_part.lower().replace('.exe', '')
-    executable = app_mappings.get(app_key, app_part)
-    
-    try:
-        # Try to launch the application
-        if executable.endswith('.exe'):
-            subprocess.Popen(executable, shell=True)
-        else:
-            # Try as a command (might be on PATH)
-            subprocess.Popen(executable, shell=True)
-        return f"🚀 Launched: {app_part.title()}"
-    except Exception as e:
-        # Fallback: try opening as if it's a file/program path
-        try:
-            os.startfile(executable)
-            return f"🚀 Launched: {app_part.title()}"
-        except:
-            return f"❌ Could not launch '{app_part}'. Make sure it's installed."
+def _search_web(query: str) -> str:
+    """Search the web - requires exact query from LLM"""
+    encoded = urllib.parse.quote(query)
+    url = f"https://www.google.com/search?q={encoded}"
+    webbrowser.open(url)
+    return f"🔍 Searched for: {query}"
 
-def _handle_system_command(command: str) -> str:
-    if 'lock' in command:
-        subprocess.Popen('rundll32.exe user32.dll,LockWorkStation', shell=True)
-        return "Screen locked."
-    return "Advanced system command blocked for safety."
+def _lock_screen() -> str:
+    """Lock the computer screen"""
+    subprocess.Popen('rundll32.exe user32.dll,LockWorkStation', shell=True)
+    return "Screen locked."

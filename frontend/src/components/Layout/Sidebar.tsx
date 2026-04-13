@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 import {
   MessageSquare, Brain, Heart, Shield, Database,
-  Book, LayoutDashboard, Terminal, Settings, Zap, Blocks, Key
+  Book, LayoutDashboard, Terminal, Settings, Zap, Blocks, Key, TrendingUp
 } from 'lucide-react'
 import { ViewMode } from '../../types'
 
@@ -24,6 +24,7 @@ const secondaryNav = [
   { id: 'diary',    label: "Krystal's Diary", icon: Book,     view: 'diary' as ViewMode,    color: 'rose' },
   { id: 'security', label: 'Security & Guard', icon: Shield,   view: 'security' as ViewMode,  color: 'emerald' },
   { id: 'plugins',  label: 'Plugins Lab',      icon: Blocks,   view: 'plugins' as ViewMode,   color: 'orange' },
+  { id: 'trading',  label: 'Trading Hub',     icon: TrendingUp, view: 'trading' as ViewMode,  color: 'emerald' },
   { id: 'api-keys', label: 'API Keys',       icon: Key,      view: 'api' as ViewMode,      color: 'blue' },
 ]
 
@@ -36,7 +37,7 @@ const colorMap: Record<string, string> = {
   amber:   'rgba(245,158,11,0.8)',
   violet:  'rgba(167,139,250,0.8)',
   rose:    'rgba(251,113,133,0.8)',
-  emerald: 'rgba(52,211,153,0.8)',
+  emerald: 'rgba(16,185,129,0.8)',
   orange:  'rgba(251,146,60,0.8)',
 }
 
