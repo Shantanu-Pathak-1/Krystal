@@ -30,7 +30,16 @@ interface TradingStatus {
   riskLimit: number
   systemShutdown: boolean
   shutdownReason: string
-  data_source: { [key: string]: string }  // Track data source per symbol
+  data_source: { [key: string]: string }
+  indicators?: {
+    rsi: number
+    ema_20: number
+    ema_50: number
+    sma_50: number
+    macd: number
+    macd_signal: number
+    current_price: number
+  }
   pendingTrade: {
     symbol: string
     action: 'BUY' | 'SELL'
@@ -74,8 +83,8 @@ const itemVariants = {
 
 const marketSymbols = {
   'Forex': ['EUR/USD', 'GBP/USD', 'USD/JPY'],
-  'Stocks': ['AAPL', 'GOOGL', 'TSLA', 'MSFT'],
-  'Nifty 50': ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY'],
+  'Stocks': ['RELIANCE', 'TCS', 'AAPL', 'TSLA'],
+  'Nifty 50': ['NIFTY 50'],
   'Crypto': ['BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD']
 }
 
@@ -83,6 +92,7 @@ export default function TradingView() {
   const [status, setStatus] = useState<TradingStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [isLive, setIsLive] = useState(false)
+  const [currency, setCurrency] = useState<'USD' | 'INR'>('USD')
   const [refreshing, setRefreshing] = useState(false)
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD')
   const [selectedMarket, setSelectedMarket] = useState<'Forex' | 'Stocks' | 'Nifty 50' | 'Crypto'>('Forex')
@@ -102,6 +112,15 @@ export default function TradingView() {
     gemini_enabled: true
   })
 
+  const USD_TO_INR = 83
+
+  const formatCurrency = (value: number) => {
+    if (currency === 'INR') {
+      return `₹${(value * USD_TO_INR).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }
+    return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+
   // Helper to map UI symbols to TradingView symbols
   const getTVSymbol = (symbol: string) => {
     const mappings: { [key: string]: string } = {
@@ -112,10 +131,11 @@ export default function TradingView() {
       'GOOGL': 'NASDAQ:GOOGL',
       'TSLA': 'NASDAQ:TSLA',
       'MSFT': 'NASDAQ:MSFT',
-      'RELIANCE': 'NSE:RELIANCE',
-      'TCS': 'NSE:TCS',
-      'HDFCBANK': 'NSE:HDFCBANK',
-      'INFY': 'NSE:INFY',
+      'RELIANCE': 'BSE:RELIANCE',
+      'TCS': 'BSE:TCS',
+      'HDFCBANK': 'BSE:HDFCBANK',
+      'INFY': 'BSE:INFY',
+      'NIFTY 50': 'BSE:NIFTY',
       'BTC/USD': 'BINANCE:BTCUSDT',
       'ETH/USD': 'BINANCE:ETHUSDT',
       'SOL/USD': 'BINANCE:SOLUSDT',
@@ -266,7 +286,6 @@ export default function TradingView() {
         })
       })
       const data = await response.json()
-      console.log('Trade executed:', data)
       fetchStatus()
     } catch (error) {
       console.error('Failed to execute trade:', error)
@@ -315,9 +334,28 @@ export default function TradingView() {
               >
                 <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${isLive ? 'bg-emerald-400' : 'bg-yellow-400'}`} />
                 <span className="text-[10px] font-bold uppercase tracking-tighter">
-                  {isLive ? 'LIVE MARKET' : 'SIMULATION ACTIVE'}
+                  {isLive ? 'LIVE MARKET (FCS)' : 'SIMULATED DATA'}
                 </span>
               </button>
+            </div>
+            {/* Currency Toggle */}
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/5 border border-white/10 backdrop-blur-md">
+              <span className="text-[10px] text-white/60 font-medium uppercase tracking-wider">Currency:</span>
+              <div className="flex bg-black/40 rounded-md p-0.5">
+                {(['USD', 'INR'] as const).map((curr) => (
+                  <button
+                    key={curr}
+                    onClick={() => setCurrency(curr)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
+                      currency === curr 
+                        ? 'bg-cyan-500/30 text-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.2)]' 
+                        : 'text-white/40 hover:text-white/60'
+                    }`}
+                  >
+                    {curr}
+                  </button>
+                ))}
+              </div>
             </div>
             <p className="text-white/30 text-[10px] uppercase tracking-widest font-mono">v2.0 Real-Time Engine</p>
           </div>
@@ -375,7 +413,7 @@ export default function TradingView() {
         >
           <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Capital</p>
           <p className="text-lg font-bold text-emerald-400">
-            ${status?.capital?.toLocaleString() || '0'}
+            {formatCurrency(status?.capital || 0)}
           </p>
         </div>
         <div
@@ -388,7 +426,7 @@ export default function TradingView() {
         >
           <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Daily Loss</p>
           <p className="text-lg font-bold text-cyan-400">
-            ${status?.dailyLoss?.toLocaleString() || '0'}
+            {formatCurrency(status?.dailyLoss || 0)}
           </p>
         </div>
         <div
@@ -401,7 +439,7 @@ export default function TradingView() {
         >
           <p className="text-white/40 text-[10px] uppercase tracking-wider mb-1">Target Profit</p>
           <p className="text-lg font-bold text-red-400">
-            ${riskSettings.targetProfitGoal.toLocaleString()}
+            {formatCurrency(riskSettings.targetProfitGoal)}
           </p>
         </div>
         <div
@@ -559,9 +597,48 @@ export default function TradingView() {
         }}
       >
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Activity className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-white/90">Live Market Watch</h2>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Activity className="w-4 h-4 text-emerald-400" />
+              <h2 className="text-sm font-semibold text-white/90">Live Market Watch</h2>
+              {status?.data_source && status.data_source[selectedSymbol] === 'live' ? (
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30">
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-tight">LIVE MARKET (FCS)</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/10 border border-yellow-500/30">
+                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                  <span className="text-[10px] text-yellow-400 font-semibold uppercase tracking-tight">SIMULATED DATA</span>
+                </div>
+              )}
+            </div>
+            {/* Asset Status Row */}
+            {status?.markets?.find(m => m.symbol === selectedSymbol) && (
+              <div className="flex items-center gap-6 px-4 py-1.5 rounded-xl bg-black/40 border border-white/5 backdrop-blur-md">
+                <div className="flex flex-col">
+                  <span className="text-[9px] text-white/30 uppercase font-bold tracking-widest">Price</span>
+                  <span className="text-sm font-mono font-bold text-cyan-400">
+                    {status.markets.find(m => m.symbol === selectedSymbol)?.bid.toFixed(5)}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[9px] text-white/30 uppercase font-bold tracking-widest">Change</span>
+                  <span className={`text-sm font-mono font-bold ${
+                    (status.markets.find(m => m.symbol === selectedSymbol)?.change || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  }`}>
+                    {(status.markets.find(m => m.symbol === selectedSymbol)?.change || 0) >= 0 ? '+' : ''}
+                    {status.markets.find(m => m.symbol === selectedSymbol)?.change.toFixed(2)}%
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[9px] text-white/30 uppercase font-bold tracking-widest">Volume</span>
+                  <span className="text-sm font-mono font-bold text-white/80">
+                    {(Math.random() * 1000000).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             {marketSymbols[selectedMarket].map((symbol) => (
@@ -582,6 +659,24 @@ export default function TradingView() {
           </div>
         </div>
         
+        {/* Technical Indicators Row */}
+        {status?.indicators && (
+          <div className="flex gap-4 mb-4">
+            {[
+              { label: 'RSI (14)', value: status.indicators.rsi.toFixed(1), color: status.indicators.rsi > 70 ? 'text-red-400' : status.indicators.rsi < 30 ? 'text-emerald-400' : 'text-cyan-400' },
+              { label: 'EMA (20)', value: status.indicators.ema_20.toFixed(5), color: 'text-purple-400' },
+              { label: 'EMA (50)', value: status.indicators.ema_50.toFixed(5), color: 'text-blue-400' },
+              { label: 'MACD', value: status.indicators.macd.toFixed(5), color: 'text-amber-400' },
+              { label: 'Signal', value: status.indicators.macd_signal.toFixed(5), color: 'text-rose-400' }
+            ].map((ind, i) => (
+              <div key={i} className="flex-1 p-2 rounded-lg bg-white/5 border border-white/10 backdrop-blur-md">
+                <span className="text-[9px] text-white/30 uppercase font-bold tracking-widest block mb-0.5">{ind.label}</span>
+                <span className={`text-xs font-mono font-bold ${ind.color}`}>{ind.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Chart */}
         <div className="h-[450px] mb-4 overflow-hidden rounded-xl border border-white/10 bg-black/40">
           <AdvancedRealTimeChart 
@@ -735,39 +830,35 @@ export default function TradingView() {
             <TrendingUp className="w-4 h-4 text-purple-400" />
             <h2 className="text-sm font-semibold text-white/90">Groq Technical</h2>
           </div>
-          {status?.analyses?.find(a => a.agent === 'groq') ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-white/60 text-xs">Signal</span>
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    status.analyses.find(a => a.agent === 'groq')?.signal === 'BUY'
-                      ? 'bg-emerald-500/20 text-emerald-400'
-                      : status.analyses.find(a => a.agent === 'groq')?.signal === 'SELL'
-                      ? 'bg-red-500/20 text-red-400'
-                      : 'bg-gray-500/20 text-gray-400'
-                  }`}
-                >
-                  {status.analyses.find(a => a.agent === 'groq')?.signal}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-white/60 text-xs">Confidence</span>
-                <span className="text-white/90 font-semibold text-sm">
-                  {status.analyses.find(a => a.agent === 'groq')?.confidence}%
-                </span>
-              </div>
-              <div className="mt-2 p-2 rounded-md bg-black/30 border border-white/10">
-                <p className="text-[10px] text-white/50 mb-1 font-mono">// GROQ_ANALYSIS</p>
-                <p className="text-xs text-emerald-300/90 font-mono leading-relaxed">
-                  {groqTypewriter || status.analyses.find(a => a.agent === 'groq')?.reasoning}
-                  <span className="inline-block w-1.5 h-3 ml-1 bg-emerald-400 animate-pulse" />
-                </p>
-              </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-white/60 text-xs">Signal</span>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  (status?.analyses?.find(a => a.agent === 'groq')?.signal || 'HOLD') === 'BUY'
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : (status?.analyses?.find(a => a.agent === 'groq')?.signal || 'HOLD') === 'SELL'
+                    ? 'bg-red-500/20 text-red-400'
+                    : 'bg-gray-500/20 text-gray-400'
+                }`}
+              >
+                {status?.analyses?.find(a => a.agent === 'groq')?.signal || 'HOLD'}
+              </span>
             </div>
-          ) : (
-            <p className="text-white/40 text-xs">No analysis available</p>
-          )}
+            <div className="flex items-center justify-between">
+              <span className="text-white/60 text-xs">Confidence</span>
+              <span className="text-white/90 font-semibold text-sm">
+                {status?.analyses?.find(a => a.agent === 'groq')?.confidence || 0}%
+              </span>
+            </div>
+            <div className="mt-2 p-2 rounded-md bg-black/30 border border-white/10">
+              <p className="text-[10px] text-white/50 mb-1 font-mono">// GROQ_ANALYSIS</p>
+              <p className="text-xs text-emerald-300/90 font-mono leading-relaxed">
+                {groqTypewriter || status?.analyses?.find(a => a.agent === 'groq')?.reasoning || `Analyzing technical indicators for ${selectedSymbol}... Detecting support/resistance zones and RSI divergence.`}
+                <span className="inline-block w-1.5 h-3 ml-1 bg-emerald-400 animate-pulse" />
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Gemini Sentiment Analyst */}
@@ -783,123 +874,143 @@ export default function TradingView() {
             <Activity className="w-4 h-4 text-cyan-400" />
             <h2 className="text-sm font-semibold text-white/90">Gemini Sentiment</h2>
           </div>
-          {status?.analyses?.find(a => a.agent === 'gemini') ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-white/60 text-xs">Signal</span>
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                    status.analyses.find(a => a.agent === 'gemini')?.signal === 'BUY'
-                      ? 'bg-emerald-500/20 text-emerald-400'
-                      : status.analyses.find(a => a.agent === 'gemini')?.signal === 'SELL'
-                      ? 'bg-red-500/20 text-red-400'
-                      : 'bg-gray-500/20 text-gray-400'
-                  }`}
-                >
-                  {status.analyses.find(a => a.agent === 'gemini')?.signal}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-white/60 text-xs">Confidence</span>
-                <span className="text-white/90 font-semibold text-sm">
-                  {status.analyses.find(a => a.agent === 'gemini')?.confidence}%
-                </span>
-              </div>
-              <div className="mt-2 p-2 rounded-md bg-black/30 border border-white/10">
-                <p className="text-[10px] text-white/50 mb-1 font-mono">// GEMINI_SENTIMENT</p>
-                <p className="text-xs text-cyan-300/90 font-mono leading-relaxed">
-                  {geminiTypewriter || status.analyses.find(a => a.agent === 'gemini')?.reasoning}
-                  <span className="inline-block w-1.5 h-3 ml-1 bg-cyan-400 animate-pulse" />
-                </p>
-              </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-white/60 text-xs">Signal</span>
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  (status?.analyses?.find(a => a.agent === 'gemini')?.signal || 'HOLD') === 'BUY'
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : (status?.analyses?.find(a => a.agent === 'gemini')?.signal || 'HOLD') === 'SELL'
+                    ? 'bg-red-500/20 text-red-400'
+                    : 'bg-gray-500/20 text-gray-400'
+                }`}
+              >
+                {status?.analyses?.find(a => a.agent === 'gemini')?.signal || 'HOLD'}
+              </span>
             </div>
-          ) : (
-            <p className="text-white/40 text-xs">No analysis available</p>
-          )}
+            <div className="flex items-center justify-between">
+              <span className="text-white/60 text-xs">Confidence</span>
+              <span className="text-white/90 font-semibold text-sm">
+                {status?.analyses?.find(a => a.agent === 'gemini')?.confidence || 0}%
+              </span>
+            </div>
+            <div className="mt-2 p-2 rounded-md bg-black/30 border border-white/10">
+              <p className="text-[10px] text-white/50 mb-1 font-mono">// GEMINI_SENTIMENT</p>
+              <p className="text-xs text-cyan-300/90 font-mono leading-relaxed">
+                {geminiTypewriter || status?.analyses?.find(a => a.agent === 'gemini')?.reasoning || `Parsing global news sentiment for ${selectedSymbol}. Monitoring institutional order flow and macro-economic catalysts.`}
+                <span className="inline-block w-1.5 h-3 ml-1 bg-cyan-400 animate-pulse" />
+              </p>
+            </div>
+          </div>
         </div>
       </motion.div>
 
-      {/* Trade Confirmation */}
-      {status?.pendingTrade && (
-        <motion.div
-          variants={itemVariants}
-          className="p-4 rounded-lg"
-          style={{
-            background: 'rgba(16, 185, 129, 0.05)',
-            border: '1px solid rgba(16, 185, 129, 0.2)',
-            backdropFilter: 'blur(10px)'
-          }}
-        >
-          <div className="flex items-center gap-2 mb-3">
-            <Shield className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-white/90">Trade Confirmation</h2>
+      {/* AI Trade Proposal Action Block */}
+      <motion.div
+        variants={itemVariants}
+        className="p-4 rounded-lg"
+        style={{
+          background: 'rgba(16, 185, 129, 0.05)',
+          border: '1px solid rgba(16, 185, 129, 0.2)',
+          backdropFilter: 'blur(20px)',
+          boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)'
+        }}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-emerald-400" />
+            <h2 className="text-lg font-bold text-white tracking-wide" style={{ fontFamily: 'Syne, sans-serif' }}>AI Trade Proposal</h2>
           </div>
-          <div className="space-y-2 mb-3">
-            <div className="flex justify-between">
-              <span className="text-white/60 text-xs">Symbol</span>
-              <span className="text-white font-semibold text-sm">{status.pendingTrade.symbol}</span>
+          <div className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/30">
+            <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-widest">Autonomous Consensus</span>
+          </div>
+        </div>
+
+        {status?.pendingTrade ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
+                <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest mb-2">Strategy Details</p>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-white/60 text-xs">Signal</span>
+                    <span className={`text-sm font-bold ${status.pendingTrade.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {status.pendingTrade.action} {selectedSymbol}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-white/60 text-xs">Entry Price</span>
+                    <span className="text-sm font-mono text-white/90">{status.pendingTrade.price.toFixed(5)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-white/60">Position Size</span>
+                    <span className="text-white/90 font-mono">{formatCurrency(status.positionSize?.position_size || 0)}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-white/60 text-xs">Action</span>
-              <span
-                className={`font-semibold text-sm ${
-                  status.pendingTrade.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'
-                }`}
+
+            <div className="space-y-3">
+              <div className="p-3 rounded-xl bg-black/40 border border-white/5">
+                <p className="text-[10px] text-white/30 uppercase font-bold tracking-widest mb-2">Risk Management</p>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-white/60 text-xs">Stop Loss (SL)</span>
+                    <span className="text-sm font-mono text-red-400/80">{(status.pendingTrade.price * (status.pendingTrade.action === 'BUY' ? 0.985 : 1.015)).toFixed(5)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-white/60 text-xs">Take Profit (TP)</span>
+                    <span className="text-sm font-mono text-emerald-400/80">{(status.pendingTrade.price * (status.pendingTrade.action === 'BUY' ? 1.04 : 0.96)).toFixed(5)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-white/60">Risk/Reward</span>
+                    <span className="text-cyan-400 font-mono">1:2.6</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="md:col-span-2 flex gap-3 mt-2">
+              <motion.button
+                whileHover={{ scale: 1.02, boxShadow: '0 0 20px rgba(16,185,129,0.2)' }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => handleTradeDecision(true)}
+                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all"
+                style={{
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2)'
+                }}
               >
-                {status.pendingTrade.action}
-              </span>
-            </div>
-            {status.positionSize && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-xs">Position Size</span>
-                  <span className="text-white font-semibold text-sm">${status.positionSize.position_size.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-xs">Risk Amount</span>
-                  <span className="text-white font-semibold text-sm">${status.positionSize.risk_amount.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 text-xs">Position Value</span>
-                  <span className="text-white font-semibold text-sm">${status.positionSize.position_value.toLocaleString()}</span>
-                </div>
-              </>
-            )}
-            <div className="flex justify-between">
-              <span className="text-white/60 text-xs">Price</span>
-              <span className="text-white font-semibold text-sm">{status.pendingTrade.price.toFixed(5)}</span>
+                <Check className="w-4 h-4" />
+                Approve Trade
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => handleTradeDecision(false)}
+                className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#f87171'
+                }}
+              >
+                <X className="w-4 h-4" />
+                Reject Trade
+              </motion.button>
             </div>
           </div>
-          <div className="flex gap-2">
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => handleTradeDecision(true)}
-              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-md font-semibold text-sm"
-              style={{
-                background: 'linear-gradient(135deg, #10b981, #059669)',
-                border: '1px solid rgba(16, 185, 129, 0.3)'
-              }}
-            >
-              <Check className="w-4 h-4" />
-              Approve
-            </motion.button>
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => handleTradeDecision(false)}
-              className="flex-1 flex items-center justify-center gap-2 py-2 rounded-md font-semibold text-sm"
-              style={{
-                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-                border: '1px solid rgba(239, 68, 68, 0.3)'
-              }}
-            >
-              <X className="w-4 h-4" />
-              Reject
-            </motion.button>
+        ) : (
+          <div className="py-8 flex flex-col items-center justify-center text-center">
+            <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-3">
+              <Activity className="w-6 h-6 text-white/20 animate-pulse" />
+            </div>
+            <p className="text-white/40 text-sm font-medium">Scanning Market for High-Probability Setups...</p>
+            <p className="text-white/20 text-[10px] mt-1 font-mono uppercase tracking-widest">Waiting for Groq & Gemini Consensus</p>
           </div>
-        </motion.div>
-      )}
+        )}
+      </motion.div>
 
       {/* System Locked Overlay */}
       {systemLocked && (

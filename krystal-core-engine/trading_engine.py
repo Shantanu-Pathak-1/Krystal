@@ -209,18 +209,34 @@ class TradingEngine:
             self._update_simulated_market_data(symbol)
 
     def _update_simulated_market_data(self, symbol: str):
-        """Generate/Update mock/simulated data for market closure or testing"""
+        """Generate/Update mock/simulated data for market closure or testing (Random Walk)"""
         if symbol not in self.market_data:
             self._add_mock_data(symbol)
         
         market = self.market_data[symbol]
-        volatility = market.bid * 0.0005
-        change = random.gauss(0, volatility)
         
-        market.bid += change
-        market.ask = market.bid + (market.bid * 0.0002)
+        # Random Walk Simulation
+        # Use a small percentage drift and volatility
+        drift = random.uniform(-0.0001, 0.0001)  # Slight bias
+        volatility = market.bid * 0.0005
+        change = (market.bid * drift) + random.gauss(0, volatility)
+        
+        # Ensure bid doesn't go below zero
+        new_bid = max(0.0001, market.bid + change)
+        
+        # Update OHLC-like data for consistency
+        market.bid = new_bid
+        market.ask = market.bid + (market.bid * 0.0002) # Fixed 2-pip relative spread
         market.change += change
-        market.change_percent = (market.change / (market.bid - market.change)) * 100
+        
+        # Calculate percent change from a theoretical daily open (simplified)
+        # We'll assume the first bid of the session was the 'open'
+        if not hasattr(self, '_sim_opens'):
+            self._sim_opens = {}
+        if symbol not in self._sim_opens:
+            self._sim_opens[symbol] = market.bid
+            
+        market.change_percent = ((market.bid - self._sim_opens[symbol]) / self._sim_opens[symbol]) * 100
         self.data_source[symbol] = 'simulated'
     
     def _initialize_market_data(self):
@@ -418,9 +434,38 @@ class TradingEngine:
         ema = data['Close'].ewm(span=period, adjust=False).mean()
         return ema.iloc[-1] if not ema.empty else data['Close'].iloc[-1]
     
+    def calculate_sma(self, data: pd.DataFrame, period: int = 50) -> float:
+        """
+        Calculate Simple Moving Average (SMA)
+        """
+        if len(data) < period:
+            return data['Close'].iloc[-1]
+        
+        sma = data['Close'].rolling(window=period).mean()
+        return sma.iloc[-1] if not sma.empty else data['Close'].iloc[-1]
+    
+    def calculate_macd(self, data: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calculate MACD (Moving Average Convergence Divergence)
+        """
+        if len(data) < 26:
+            return {'macd': 0.0, 'signal': 0.0, 'hist': 0.0}
+        
+        exp1 = data['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = data['Close'].ewm(span=26, adjust=False).mean()
+        macd = exp1 - exp2
+        signal = macd.ewm(span=9, adjust=False).mean()
+        hist = macd - signal
+        
+        return {
+            'macd': macd.iloc[-1],
+            'signal': signal.iloc[-1],
+            'hist': hist.iloc[-1]
+        }
+
     def get_technical_indicators(self, symbol: str) -> Dict[str, float]:
         """
-        Get technical indicators for a symbol
+        Get technical indicators for a symbol using yfinance data
         """
         data = self.fetch_market_data(symbol, period='5d', interval='5m')
         
@@ -430,13 +475,21 @@ class TradingEngine:
                 'rsi': 50.0,
                 'ema_20': 0.0,
                 'ema_50': 0.0,
+                'sma_50': 0.0,
+                'macd': 0.0,
+                'macd_signal': 0.0,
                 'current_price': 0.0
             }
+        
+        macd_data = self.calculate_macd(data)
         
         indicators = {
             'rsi': self.calculate_rsi(data, period=14),
             'ema_20': self.calculate_ema(data, period=20),
             'ema_50': self.calculate_ema(data, period=50),
+            'sma_50': self.calculate_sma(data, period=50),
+            'macd': macd_data['macd'],
+            'macd_signal': macd_data['signal'],
             'current_price': data['Close'].iloc[-1]
         }
         
@@ -635,37 +688,6 @@ class TradingEngine:
             trade['evaluated'] = True
             trade['pnl'] = pnl
             trade['profitable'] = is_profitable
-    
-    def _update_market_data(self):
-        """Simulate live market data updates"""
-        for symbol, data in self.market_data.items():
-            # Simulate price movement
-            movement = random.uniform(-0.0010, 0.0010)
-            data.bid += movement
-            data.ask += movement
-            data.change += random.uniform(-0.1, 0.1)
-            data.change_percent += random.uniform(-0.01, 0.01)
-            
-            # Keep within reasonable bounds
-            if data.bid < 0.5:
-                data.bid = 0.5
-                data.ask = 0.5 + 0.0002
-    
-    async def fetch_live_data(self) -> Dict[str, MarketData]:
-        """
-        Fetch live market data from FCS API
-        Falls back to mock data if API key is missing
-        """
-        if self.fcs_api_key:
-            try:
-                # TODO: Implement actual FCS API call
-                # For now, use mock data
-                pass
-            except Exception as e:
-                print(f"Error fetching from FCS API: {e}")
-        
-        self._update_market_data()
-        return self.market_data
     
     async def _groq_technical_analysis(self, symbol: str) -> AgentAnalysis:
         indicators = self.get_technical_indicators(symbol)
@@ -952,10 +974,14 @@ class TradingEngine:
             'position_value': round(position_size * current_price, 2)
         }
     
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """
         Get current trading status including market data and agent analyses.
         """
+        indicators = {}
+        if symbol:
+            indicators = self.get_technical_indicators(symbol)
+
         return {
             "capital": self.capital,
             "daily_loss": self.daily_loss,
@@ -966,6 +992,7 @@ class TradingEngine:
             "system_shutdown": self.system_shutdown,
             "shutdown_reason": self.shutdown_reason,
             "data_source": self.data_source,
+            "indicators": indicators,
             "markets": [
                 {
                     "symbol": data.symbol,

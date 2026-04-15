@@ -744,7 +744,7 @@ async def get_trading_status(mode: str = "simulated", symbol: str = "EUR/USD"):
         trading_engine.generate_trade_signal(symbol)
         
         # Return status with the current mode
-        status = trading_engine.get_status()
+        status = trading_engine.get_status(symbol=symbol)
         status['mode'] = mode
         return status
     except Exception as e:
