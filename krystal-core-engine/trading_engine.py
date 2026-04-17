@@ -13,6 +13,10 @@ import random
 import time
 import pandas as pd
 import yfinance as yf
+import logging
+
+# Setup logger
+logger = logging.getLogger("Krystal.trading")
 
 # FCS API Configuration (https://fcsapi.com)
 FCS_API_BASE = "https://fcsapi.com/api-v3"
@@ -120,6 +124,9 @@ class TradingEngine:
         self.fcs_access_key = os.getenv('FCS_ACCESS_KEY', 'your_access_key_here')
         self.groq_api_key = os.getenv('GROQ_KEY_1', '') or os.getenv('GROQ_API_KEY', '')
         self.gemini_api_key = os.getenv('GEMINI_KEY_1', '') or os.getenv('GEMINI_API_KEY', '')
+
+        # Production mode flag - disable mock data when set to true (can be toggled via API)
+        self.production_mode = False
         
         # Initialize market data and price simulator
         self._initialize_market_data()
@@ -178,15 +185,18 @@ class TradingEngine:
                         change_percent=change_percent
                     )
                     self.data_source[symbol] = 'live'
-                    print(f"✅ Live FCS data for {symbol}: {last:.2f}")
+                    logger.info(f"[TRADING] Live FCS data for {symbol}: {last:.2f}")
                     return
             
             # Fallback to yfinance if FCS fails
-            print(f"⚠️ FCS API failed for {symbol}, falling back to yfinance")
+            logger.warning(f"[TRADING] FCS API failed for {symbol}, falling back to yfinance")
             await self._fetch_yfinance_data(symbol)
             
+        except (ConnectionError, TimeoutError) as e:
+            logger.warning(f"[TRADING] Network error fetching FCS data for {symbol}: {e}")
+            await self._fetch_yfinance_data(symbol)
         except Exception as e:
-            print(f"❌ Error fetching live FCS data for {symbol}: {e}")
+            logger.error(f"[TRADING] Error fetching live FCS data for {symbol}: {e}")
             await self._fetch_yfinance_data(symbol)
 
     async def _fetch_yfinance_data(self, symbol: str):
@@ -204,38 +214,46 @@ class TradingEngine:
                     change_percent=((latest['Close'] - latest['Open']) / latest['Open']) * 100
                 )
                 self.data_source[symbol] = 'live'
+        except (ConnectionError, TimeoutError) as e:
+            logger.warning(f"[TRADING] Network error in yfinance for {symbol}: {e}")
+            self._update_simulated_market_data(symbol)
         except Exception as e:
-            print(f"⚠️ yfinance fallback failed for {symbol}: {e}")
+            logger.error(f"[TRADING] yfinance fallback failed for {symbol}: {e}")
             self._update_simulated_market_data(symbol)
 
     def _update_simulated_market_data(self, symbol: str):
         """Generate/Update mock/simulated data for market closure or testing (Random Walk)"""
+        # Skip mock data in production mode
+        if self.production_mode:
+            logger.info(f"[TRADING] Production mode enabled - skipping mock data for {symbol}")
+            return
+
         if symbol not in self.market_data:
             self._add_mock_data(symbol)
-        
+
         market = self.market_data[symbol]
-        
+
         # Random Walk Simulation
         # Use a small percentage drift and volatility
         drift = random.uniform(-0.0001, 0.0001)  # Slight bias
         volatility = market.bid * 0.0005
         change = (market.bid * drift) + random.gauss(0, volatility)
-        
+
         # Ensure bid doesn't go below zero
         new_bid = max(0.0001, market.bid + change)
-        
+
         # Update OHLC-like data for consistency
         market.bid = new_bid
         market.ask = market.bid + (market.bid * 0.0002) # Fixed 2-pip relative spread
         market.change += change
-        
+
         # Calculate percent change from a theoretical daily open (simplified)
         # We'll assume the first bid of the session was the 'open'
         if not hasattr(self, '_sim_opens'):
             self._sim_opens = {}
         if symbol not in self._sim_opens:
             self._sim_opens[symbol] = market.bid
-            
+
         market.change_percent = ((market.bid - self._sim_opens[symbol]) / self._sim_opens[symbol]) * 100
         self.data_source[symbol] = 'simulated'
     
@@ -261,28 +279,36 @@ class TradingEngine:
                         change_percent=((latest['Close'] - latest['Open']) / latest['Open']) * 100
                     )
                     self.data_source[symbol] = 'live'
-                    print(f"✅ Loaded LIVE data for {symbol}: {latest['Close']:.2f}")
+                    logger.info(f"[TRADING] Loaded LIVE data for {symbol}: {latest['Close']:.2f}")
                 else:
                     # Fallback to mock data
                     self._add_mock_data(symbol)
                     self.data_source[symbol] = 'simulated'
+            except (ConnectionError, TimeoutError) as e:
+                logger.warning(f"[TRADING] Network error, using mock data for {symbol}: {e}")
+                self._add_mock_data(symbol)
             except Exception as e:
-                print(f"⚠️ Using mock data for {symbol}: {e}")
+                logger.error(f"[TRADING] Using mock data for {symbol}: {e}")
                 self._add_mock_data(symbol)
                 self.data_source[symbol] = 'simulated'
     
     def _add_mock_data(self, symbol: str):
         """Add mock data as fallback"""
+        # Skip mock data in production mode
+        if self.production_mode:
+            logger.info(f"[TRADING] Production mode enabled - skipping mock data for {symbol}")
+            return
+
         base_prices = {
             'EUR/USD': 1.0850, 'GBP/USD': 1.2650, 'USD/JPY': 149.50,
             'AAPL': 150.0, 'GOOGL': 140.0, 'TSLA': 180.0, 'MSFT': 380.0,
             'RELIANCE': 2500.0, 'TCS': 3500.0, 'HDFCBANK': 1600.0, 'INFY': 1450.0,
             'BTC/USD': 45000.0, 'ETH/USD': 2500.0, 'SOL/USD': 100.0, 'XRP/USD': 0.60
         }
-        
+
         base = base_prices.get(symbol, 100.0)
         spread = base * 0.0002
-        
+
         self.market_data[symbol] = MarketData(
             symbol=symbol,
             bid=base,
@@ -328,45 +354,43 @@ class TradingEngine:
                         }
                         self.ohlc_data[symbol].append(candle)
                     self.data_source[symbol] = 'live'
-                    print(f"✅ Generated LIVE OHLC data for {symbol}: {len(self.ohlc_data[symbol])} candles")
+                    logger.info(f"[TRADING] Generated LIVE OHLC data for {symbol}: {len(self.ohlc_data[symbol])} candles")
                 else:
                     # Fallback to mock data
                     self._generate_mock_ohlc(symbol)
                     self.data_source[symbol] = 'simulated'
+            except (ConnectionError, TimeoutError) as e:
+                logger.warning(f"[TRADING] Network error, using mock OHLC for {symbol}: {e}")
+                self._generate_mock_ohlc(symbol)
             except Exception as e:
-                print(f"⚠️ Using mock OHLC data for {symbol}: {e}")
+                logger.error(f"[TRADING] Using mock OHLC data for {symbol}: {e}")
                 self._generate_mock_ohlc(symbol)
                 self.data_source[symbol] = 'simulated'
     
     def _generate_mock_ohlc(self, symbol: str):
         """Generate mock OHLC data as fallback"""
+        # Skip mock data in production mode
+        if self.production_mode:
+            logger.info(f"[TRADING] Production mode enabled - skipping mock OHLC data for {symbol}")
+            return
+
         base_prices = {
             'EUR/USD': 1.0850, 'GBP/USD': 1.2650, 'USD/JPY': 149.50,
             'AAPL': 150.0, 'GOOGL': 140.0, 'TSLA': 180.0, 'MSFT': 380.0,
             'RELIANCE': 2500.0, 'TCS': 3500.0, 'HDFCBANK': 1600.0, 'INFY': 1450.0,
             'BTC/USD': 45000.0, 'ETH/USD': 2500.0, 'SOL/USD': 100.0, 'XRP/USD': 0.60
         }
-        
+
         base = base_prices.get(symbol, 100.0)
+
         self.ohlc_data[symbol] = []
-        
-        # Generate 100 candles of historical data
-        current_time = datetime.now() - timedelta(minutes=100)
-        current_price = base
-        
         for i in range(100):
-            # Simulate realistic price movement
-            volatility = base * 0.002
-            
-            # Generate OHLC
-            open_price = current_price
-            high_price = open_price + abs(random.gauss(0, volatility * 0.5))
-            low_price = open_price - abs(random.gauss(0, volatility * 0.5))
-            close_price = open_price + random.gauss(0, volatility)
-            
-            # Ensure high >= open, close and low <= open, close
-            high_price = max(high_price, open_price, close_price)
-            low_price = min(low_price, open_price, close_price)
+            # Random walk for OHLC
+            open_price = base + random.uniform(-1, 1)
+            close_price = open_price + random.uniform(-0.5, 0.5)
+            high_price = max(open_price, close_price) + random.uniform(0, 0.5)
+            low_price = min(open_price, close_price) - random.uniform(0, 0.5)
+
             
             # Create candle
             candle = {
@@ -398,7 +422,11 @@ class TradingEngine:
                 return None
             
             return data
-        except Exception:
+        except (ConnectionError, TimeoutError) as e:
+            logger.warning(f"[TRADING] Network error fetching market data: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[TRADING] Error fetching market data: {e}")
             return None
     
     def _get_yfinance_symbol(self, symbol: str) -> Optional[str]:
@@ -619,12 +647,12 @@ class TradingEngine:
     def toggle_groq(self, enabled: bool):
         """Toggle Groq agent on/off"""
         self.groq_enabled = enabled
-        print(f"{'✅' if enabled else '❌'} Groq agent {'enabled' if enabled else 'disabled'}")
+        logger.info(f"[{'SUCCESS' if enabled else 'OFF'}] Groq agent {'enabled' if enabled else 'disabled'}")
     
     def toggle_gemini(self, enabled: bool):
         """Toggle Gemini agent on/off"""
         self.gemini_enabled = enabled
-        print(f"{'✅' if enabled else '❌'} Gemini agent {'enabled' if enabled else 'disabled'}")
+        logger.info(f"[{'SUCCESS' if enabled else 'OFF'}] Gemini agent {'enabled' if enabled else 'disabled'}")
     
     def get_agent_status(self) -> Dict[str, bool]:
         """Get current status of AI agents"""
@@ -854,7 +882,7 @@ class TradingEngine:
                     self.pending_trade = trade
                     return trade
                 else:
-                    print(f"Iron Guard blocked trade: {reason}")
+                    logger.warning(f"Iron Guard blocked trade: {reason}")
                     return None
         
         return None

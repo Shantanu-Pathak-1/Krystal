@@ -109,4 +109,12 @@
     -webkit-backdrop-filter: blur(12px);
     border-radius: 1rem;
   }
+
+  /* Electron window dragging */
+  .draggable-header {
+    -webkit-app-region: drag;
+  }
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
 }

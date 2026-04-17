@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "dev:electron": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dev:electron": "concurrently \"..\\.venv\\Scripts\\python ../api.py\" \"vite --port 5173 --strictPort\" \"electron . --no-sandbox\"",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"

@@ -1,0 +1,69 @@
+# Krystal Advanced Version Configuration
+# For high-end PCs (6+ cores CPU, 16GB RAM, 50GB SSD, GPU optional)
+
+version: "advanced"
+display_name: "Krystal Advanced"
+description: "Full features with local processing and advanced capabilities"
+
+# Feature Flags
+features:
+  # Core Features
+  chat: true
+  file_operations: true
+  code_writer: true
+  
+  # Voice Features (Full support)
+  voice: true
+  local_whisper: true
+  cloud_whisper: true
+  text_to_speech: true
+  
+  # Memory Features
+  vector_memory: true
+  mongodb: true
+  
+  # Advanced Features (All enabled)
+  trading: true
+  multiple_providers: true
+  project_context: true
+  social_hub: true
+  advanced_plugins: true
+  
+  # Frontend Features
+  dashboard: true
+  memory_vault: true
+  diary: true
+  trading_hub: true
+  api_keys: true
+
+# Optimization Settings
+optimizations:
+  lazy_loading: false
+  minimal_animations: false
+  cloud_services: true
+  local_models: true
+  
+# LLM Provider Settings
+llm:
+  primary_provider: "groq"
+  fallback_provider: "gemini"
+  max_tokens: 8192
+  temperature: 0.7
+
+# Voice Settings (Full support)
+voice:
+  whisper_api: true
+  local_model: true
+  tts_enabled: true
+  
+# Database Settings
+database:
+  mongodb_enabled: true
+  pinecone_enabled: true
+  local_search: false
+
+# Resource Limits
+resource_limits:
+  max_memory_mb: 8192
+  max_cpu_percent: 90
+  max_concurrent_requests: 20

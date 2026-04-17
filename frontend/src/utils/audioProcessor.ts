@@ -170,29 +170,62 @@ export class TTSPlayer {
   }
 
   private async synthesizeSpeechToBlob(utterance: SpeechSynthesisUtterance): Promise<Blob> {
-    return new Promise((resolve) => {
-      // This is a simplified version - in production, you'd use a proper TTS API
-      // For now, we'll create a dummy audio blob
-      const audioContext = new AudioContext();
-      const sampleRate = audioContext.sampleRate;
-      const duration = utterance.text.length * 0.1; // Rough estimate
-      const numSamples = sampleRate * duration;
-      
-      const buffer = audioContext.createBuffer(1, numSamples, sampleRate);
-      const channel = buffer.getChannelData(0);
-      
-      // Generate some dummy audio data with speech-like patterns
-      for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        // Create speech-like waveform with varying amplitude
-        const envelope = Math.exp(-t * 0.5) * (0.5 + 0.5 * Math.sin(2 * Math.PI * 440 * t));
-        channel[i] = envelope * (Math.random() - 0.5) * 0.3;
+    return new Promise(async (resolve) => {
+      try {
+        // Call backend TTS API for real audio generation
+        const response = await fetch('http://localhost:8000/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: utterance.text,
+            voice: utterance.voice?.name || 'en-US-AriaNeural'
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success' && data.audio) {
+          // Convert base64 to blob
+          const audioData = atob(data.audio);
+          const arrayBuffer = new ArrayBuffer(audioData.length);
+          const view = new Uint8Array(arrayBuffer);
+          for (let i = 0; i < audioData.length; i++) {
+            view[i] = audioData.charCodeAt(i);
+          }
+          resolve(new Blob([arrayBuffer], { type: data.format === 'mp3' ? 'audio/mpeg' : 'audio/wav' }));
+        } else {
+          // Fallback to dummy audio if backend fails
+          console.warn('Backend TTS failed, using fallback:', data.message);
+          resolve(this.createDummyAudio(utterance));
+        }
+      } catch (error) {
+        console.error('Failed to call backend TTS:', error);
+        // Fallback to dummy audio
+        resolve(this.createDummyAudio(utterance));
       }
-      
-      // Convert to WAV blob
-      const wav = this.audioBufferToWav(buffer);
-      resolve(new Blob([wav], { type: 'audio/wav' }));
     });
+  }
+
+  private createDummyAudio(utterance: SpeechSynthesisUtterance): Blob {
+    const audioContext = new AudioContext();
+    const sampleRate = audioContext.sampleRate;
+    const duration = utterance.text.length * 0.1; // Rough estimate
+    const numSamples = sampleRate * duration;
+
+    const buffer = audioContext.createBuffer(1, numSamples, sampleRate);
+    const channel = buffer.getChannelData(0);
+
+    // Generate some dummy audio data with speech-like patterns
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sampleRate;
+      // Create speech-like waveform with varying amplitude
+      const envelope = Math.exp(-t * 0.5) * (0.5 + 0.5 * Math.sin(2 * Math.PI * 440 * t));
+      channel[i] = envelope * (Math.random() - 0.5) * 0.3;
+    }
+
+    // Convert to WAV blob
+    const wav = this.audioBufferToWav(buffer);
+    return new Blob([wav], { type: 'audio/wav' });
   }
 
   private audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {

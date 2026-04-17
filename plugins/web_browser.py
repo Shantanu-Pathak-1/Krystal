@@ -1,6 +1,5 @@
 """Web browsing plugin: uses Playwright to read and extract webpage content."""
 
-from playwright.sync_api import sync_playwright
 import sys
 import re
 from pathlib import Path
@@ -21,6 +20,12 @@ def run(query, **kwargs):
         Extracted and summarized content from webpage
     """
     _ = kwargs
+    
+    # Dynamic import: Only load Playwright when this tool is actually called
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return "Error: Playwright not available. Install with: pip install playwright"
     
     # Extract URL from query
     url = query.strip()

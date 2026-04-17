@@ -20,52 +20,13 @@ export default function LogsView() {
   const logsEndRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Generate mock logs
-  const generateMockLogs = (): LogEntry[] => {
-    const sources = ['KrystalEngine', 'MongoDB', 'Pinecone', 'API', 'PluginManager', 'LLMProcessor', 'MemoryStore']
-    const levels: LogEntry['level'][] = ['info', 'warning', 'error', 'success', 'debug']
-    const messages = [
-      'System initialized successfully',
-      'Database connection established',
-      'Processing user request',
-      'Plugin loaded: /os',
-      'Memory vector stored successfully',
-      'Chat history saved to MongoDB',
-      'Voice recognition started',
-      'Security scan completed',
-      'Cache cleared',
-      'API request processed',
-      'Error in plugin execution',
-      'Warning: High memory usage detected',
-      'Debug: Processing command',
-      'Success: Operation completed',
-    ]
-
-    return Array.from({ length: 50 }, (_, i) => ({
-      id: `log-${i}`,
-      timestamp: new Date(Date.now() - i * 60000).toISOString(),
-      level: levels[Math.floor(Math.random() * levels.length)],
-      source: sources[Math.floor(Math.random() * sources.length)],
-      message: messages[Math.floor(Math.random() * messages.length)],
-      metadata: {
-        userId: `user-${Math.floor(Math.random() * 10)}`,
-        sessionId: `session-${Math.floor(Math.random() * 5)}`,
-        duration: Math.floor(Math.random() * 1000),
-      },
-    }))
-  }
-
   useEffect(() => {
     const fetchLogs = async () => {
       setIsLoading(true)
       try {
-        // TODO: Replace with actual API call
-        // const response = await apiService.getLogs()
-        // setLogs(response.logs)
-        
-        // Mock data for now
-        const mockLogs = generateMockLogs()
-        setLogs(mockLogs)
+        const response = await fetch('http://localhost:8000/api/logs')
+        const data = await response.json()
+        setLogs(data.logs || [])
       } catch (error) {
         console.error('Failed to fetch logs:', error)
       } finally {
@@ -74,7 +35,7 @@ export default function LogsView() {
     }
 
     fetchLogs()
-    const interval = setInterval(fetchLogs, 10000) // Update every 10 seconds
+    const interval = setInterval(fetchLogs, 5000) // Update every 5 seconds
     return () => clearInterval(interval)
   }, [])
 
@@ -176,8 +137,9 @@ export default function LogsView() {
   }
 
   const refreshLogs = () => {
-    const mockLogs = generateMockLogs()
-    setLogs(mockLogs)
+    // Logs are auto-refreshed every 5 seconds
+    // This button is now just a placeholder for manual refresh if needed
+    window.location.reload()
   }
 
   return (

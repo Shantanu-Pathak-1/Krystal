@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { TrendingUp, Activity, Shield, Check, X, RefreshCw, Sliders, Zap, Globe, Cpu } from 'lucide-react'
 import { AdvancedRealTimeChart } from 'react-ts-tradingview-widgets'
 import { CandlestickData } from 'lightweight-charts'
+import { usePerformance } from '../context/PerformanceContext'
 
 interface MarketData {
   symbol: string
@@ -89,6 +90,7 @@ const marketSymbols = {
 }
 
 export default function TradingView() {
+  const { pollingInterval, enableAnimations } = usePerformance()
   const [status, setStatus] = useState<TradingStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [isLive, setIsLive] = useState(false)
@@ -197,9 +199,9 @@ export default function TradingView() {
 
   useEffect(() => {
     fetchStatus()
-    const statusInterval = setInterval(fetchStatus, 3000)
+    const statusInterval = setInterval(fetchStatus, pollingInterval)
     return () => clearInterval(statusInterval)
-  }, [fetchStatus])
+  }, [fetchStatus, pollingInterval])
 
   useEffect(() => {
     fetchOHLCData()

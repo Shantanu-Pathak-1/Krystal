@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion'
+import { useState, useEffect } from 'react'
 import {
-  MessageSquare, Brain, Heart, Shield, Database,
-  Book, LayoutDashboard, Terminal, Settings, Zap, Blocks, Key, TrendingUp
+  MessageSquare, Brain, Heart, Database,
+  Book, LayoutDashboard, Terminal, Settings, Zap, Key, TrendingUp, Mic, MicOff
 } from 'lucide-react'
 import { ViewMode } from '../../types'
 
@@ -22,8 +23,6 @@ const primaryNav = [
 const secondaryNav = [
   { id: 'memory',   label: 'Memory Vault',   icon: Database,  view: 'memory' as ViewMode,   color: 'violet' },
   { id: 'diary',    label: "Krystal's Diary", icon: Book,     view: 'diary' as ViewMode,    color: 'rose' },
-  { id: 'security', label: 'Security & Guard', icon: Shield,   view: 'security' as ViewMode,  color: 'emerald' },
-  { id: 'plugins',  label: 'Plugins Lab',      icon: Blocks,   view: 'plugins' as ViewMode,   color: 'orange' },
   { id: 'trading',  label: 'Trading Hub',     icon: TrendingUp, view: 'trading' as ViewMode,  color: 'emerald' },
   { id: 'api-keys', label: 'API Keys',       icon: Key,      view: 'api' as ViewMode,      color: 'blue' },
 ]
@@ -58,6 +57,24 @@ const itemVariants = {
 }
 
 export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
+  const [voiceStatus, setVoiceStatus] = useState<'passive' | 'active'>('passive');
+
+  useEffect(() => {
+    const checkVoiceStatus = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/api/system/voice-status');
+        const data = await res.json();
+        setVoiceStatus(data.voice_status);
+      } catch (e) {
+        console.error('Voice monitor failed:', e);
+      }
+    };
+    
+    checkVoiceStatus();
+    const interval = setInterval(checkVoiceStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <motion.aside
       variants={sidebarVariants}
@@ -119,6 +136,40 @@ export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
           <p className="text-[9px] tracking-[0.3em] uppercase text-white/30 mt-0.5">AI Interface v1.0</p>
         </div>
       </motion.div>
+
+      {/* Voice Status Indicator */}
+      <div className="px-4 pt-4">
+        <div className={`flex items-center gap-3 px-4 py-3 rounded-xl backdrop-blur-md border transition-all duration-500 ${
+          voiceStatus === 'active' 
+            ? 'bg-emerald-500/10 border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.2)]' 
+            : 'bg-white/5 border-white/10'
+        }`}>
+          <div className="relative">
+            {voiceStatus === 'active' && (
+              <motion.div
+                animate={{ scale: [1, 1.5, 1] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+                className="absolute inset-0 bg-emerald-400/20 rounded-full blur-sm"
+              />
+            )}
+            {voiceStatus === 'active' ? (
+              <Mic className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <MicOff className="w-4 h-4 text-white/20" />
+            )}
+          </div>
+          <div className="flex flex-col">
+            <span className={`text-[10px] font-bold tracking-widest uppercase ${
+              voiceStatus === 'active' ? 'text-emerald-400' : 'text-white/20'
+            }`}>
+              {voiceStatus === 'active' ? 'Krystal Active' : 'Passive Listen'}
+            </span>
+            <span className="text-[8px] text-white/30 font-mono">
+              {voiceStatus === 'active' ? 'Full STS Pipeline' : 'Waiting for Wake Word'}
+            </span>
+          </div>
+        </div>
+      </div>
 
       {/* Primary Navigation */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto scrollbar-none">

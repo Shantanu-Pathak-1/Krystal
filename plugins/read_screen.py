@@ -7,9 +7,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import mss
-from mss import tools as mss_tools
-
 NAME = "/see"
 DESCRIPTION = "Takes a screenshot of the current screen and analyzes it."
 
@@ -29,6 +26,14 @@ def clean_old_screenshots(cache_dir: Path, days: int = 10) -> None:
 
 def run(query, **kwargs):
     _ = kwargs
+    
+    # Dynamic import: Only load mss when this tool is actually called
+    try:
+        import mss
+        from mss import tools as mss_tools
+    except ImportError:
+        return "Error: mss not available. Install with: pip install mss"
+    
     root = Path(__file__).resolve().parent.parent
     engine_dir = root / "krystal-core-engine"
     if str(engine_dir) not in sys.path:

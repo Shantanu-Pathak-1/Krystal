@@ -72,7 +72,6 @@ export default function ApiDashboardView() {
         const res = await fetch('http://localhost:8000/api/resources/stats')
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: ApiStats = await res.json()
-        console.log('[ApiDashboard] payload:', data)
         setStats(data)
       } catch (e: any) {
         console.error('[ApiDashboard] fetch error:', e)

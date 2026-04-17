@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ChevronDown, RefreshCw, Shield, Zap, Eye, AlertTriangle, Cpu, Wifi, WifiOff } from 'lucide-react'
+import { ChevronDown, RefreshCw, Shield, Zap, Eye, AlertTriangle, Cpu, Wifi, WifiOff, Gauge, Leaf, Zap as ZapIcon, Settings2, Sun, Moon, Monitor } from 'lucide-react'
 import { ViewMode, AutonomyMode } from '../../types'
+import { usePerformance } from '../../context/PerformanceContext'
+import { useTheme } from '../../context/ThemeContext'
 
 interface TopNavigationProps {
   currentView: ViewMode
@@ -21,6 +23,8 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   diary:     "Krystal's Diary",
   security:  'Security & Guard',
   plugins:   'Plugins Lab',
+  api:       'API Dashboard',
+  trading:   'Trading View',
 }
 
 const AUTONOMY_OPTIONS = [
@@ -63,10 +67,27 @@ const dropdownVariants = {
   exit:    { opacity: 0, y: -8, scale: 0.96, transition: { duration: 0.15 } },
 }
 
-// Model selection dropdown
+// Global model state (matches pattern in MainChat.tsx)
+let globalSelectedModelValue: string = 'groq'
+export const getGlobalSelectedModel = () => globalSelectedModelValue
+export const setGlobalSelectedModel = (model: string) => { globalSelectedModelValue = model }
+
+// Model selection dropdown - linked to global state
 function ModelSelector() {
-  const [selectedModel, setSelectedModel] = useState<string>('groq')
+  const [selectedModel, setSelectedModel] = useState<string>(globalSelectedModelValue)
   const [isOpen, setIsOpen] = useState(false)
+
+  // Sync with global state when dropdown changes
+  const handleModelChange = (modelValue: string) => {
+    setSelectedModel(modelValue)
+    setGlobalSelectedModel(modelValue)
+    // Notify backend of model change
+    fetch('/api/model/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: modelValue }),
+    }).catch(() => {}) // Silent fail - model will be used on next chat
+  }
 
   const models = [
     { value: 'groq', label: 'Groq', color: '#10b981' },
@@ -109,13 +130,7 @@ function ModelSelector() {
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="absolute top-full left-0 mt-2 w-48 rounded-2xl overflow-hidden z-50"
-            style={{
-              background: 'rgba(6,9,20,0.97)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              backdropFilter: 'blur(24px)',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-            }}
+            className="absolute top-full left-0 mt-2 w-48 rounded-2xl overflow-hidden pointer-events-auto z-[9999] bg-[#030712]/95 backdrop-blur-md border border-emerald-900/50 shadow-2xl"
           >
             {models.map((model, index) => (
               <motion.button
@@ -128,8 +143,8 @@ function ModelSelector() {
                 transition={{ duration: 0.2, delay: index * 0.05 }}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.97 }}
-                onClick={() => {
-                  setSelectedModel(model.value)
+                onMouseDown={() => {
+                  handleModelChange(model.value)
                   setIsOpen(false)
                 }}
                 className="w-full text-left px-4 py-3 flex items-center gap-3 transition-colors duration-200"
@@ -231,17 +246,95 @@ export default function TopNavigation({
 }: TopNavigationProps) {
   const [autonomyOpen, setAutonomyOpen] = useState(false)
   const autonomyRef = useRef<HTMLDivElement>(null!)
+  const performanceRef = useRef<HTMLDivElement>(null!)
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const themeRef = useRef<HTMLDivElement>(null!)
+  const [themeOpen, setThemeOpen] = useState(false)
+
+  const { mode: performanceMode, setMode: setPerformanceMode, actualMode } = usePerformance()
+  const { theme, setTheme } = useTheme()
+
+  useOutsideClick(themeRef, () => setThemeOpen(false))
 
   useOutsideClick(autonomyRef, () => setAutonomyOpen(false))
+  useOutsideClick(performanceRef, () => setPerformanceOpen(false))
 
   const currentAutonomy = AUTONOMY_OPTIONS.find(o => o.value === autonomyMode)!
+
+  // Close all other dropdowns when one opens
+  const closeOtherDropdowns = (currentOpen: string) => {
+    if (currentOpen !== 'performance') setPerformanceOpen(false)
+    if (currentOpen !== 'theme') setThemeOpen(false)
+    if (currentOpen !== 'autonomy') setAutonomyOpen(false)
+  }
+
+  // Performance mode options
+  const PERFORMANCE_OPTIONS = [
+    {
+      value: 'auto' as const,
+      label: 'Auto',
+      desc: `Adaptive (${actualMode})`,
+      color: '#8b5cf6',
+      icon: Settings2,
+    },
+    {
+      value: 'eco' as const,
+      label: 'Eco',
+      desc: '60s refresh · 30 FPS',
+      color: '#10b981',
+      icon: Leaf,
+    },
+    {
+      value: 'balanced' as const,
+      label: 'Balanced',
+      desc: '30s refresh · 60 FPS',
+      color: '#f59e0b',
+      icon: Gauge,
+    },
+    {
+      value: 'overdrive' as const,
+      label: 'Overdrive',
+      desc: '1s refresh · 144 FPS',
+      color: '#ef4444',
+      icon: ZapIcon,
+    },
+  ]
+
+  const currentPerformance = PERFORMANCE_OPTIONS.find(o => o.value === performanceMode) || PERFORMANCE_OPTIONS[2]
+
+  // Theme mode options
+  const THEME_OPTIONS = [
+    {
+      value: 'system' as const,
+      label: 'System',
+      desc: 'Follow OS preference',
+      color: '#8b5cf6',
+      icon: Monitor,
+    },
+    {
+      value: 'light' as const,
+      label: 'Light',
+      desc: 'Always light mode',
+      color: '#f59e0b',
+      icon: Sun,
+    },
+    {
+      value: 'dark' as const,
+      label: 'Dark',
+      desc: 'Always dark mode',
+      color: '#10b981',
+      icon: Moon,
+    },
+  ]
+
+  const currentTheme = THEME_OPTIONS.find(o => o.value === theme) || THEME_OPTIONS[0]
 
   return (
     <motion.header
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="relative flex items-center justify-between px-6 flex-shrink-0"
+      className="relative z-[9999] flex items-center justify-between px-6 flex-shrink-0"
       style={{
         height: 60,
         background: 'rgba(3,5,14,0.9)',
@@ -286,12 +379,162 @@ export default function TopNavigation({
         {/* Model status indicator */}
         <ModelStatus />
 
+        {/* Performance mode dropdown */}
+        <div ref={performanceRef} className="relative">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => { closeOtherDropdowns('performance'); setPerformanceOpen(o => !o) }}
+            className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
+            style={{
+              background: `${currentPerformance.color}10`,
+              border: `1px solid ${currentPerformance.color}30`,
+              color: currentPerformance.color,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              letterSpacing: '0.1em',
+            }}
+          >
+            <currentPerformance.icon className="w-3.5 h-3.5" />
+            <span>{currentPerformance.label}</span>
+            <motion.div animate={{ rotate: performanceOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </motion.div>
+          </motion.button>
+
+          <AnimatePresence>
+            {performanceOpen && (
+              <motion.div
+                variants={dropdownVariants}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                className="absolute top-full right-0 mt-2 w-56 rounded-2xl overflow-hidden pointer-events-auto z-[9999] bg-[#030712]/95 backdrop-blur-md border border-emerald-900/50 shadow-2xl"
+              >
+                <div className="p-2">
+                  {PERFORMANCE_OPTIONS.map(option => {
+                    const Icon = option.icon
+                    const active = performanceMode === option.value
+                    return (
+                      <motion.button
+                        key={option.value}
+                        whileHover={{ x: 3 }}
+                        onMouseDown={() => { setPerformanceMode(option.value); setPerformanceOpen(false) }}
+                        className="w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-150"
+                        style={
+                          active
+                            ? { background: `${option.color}12`, border: `1px solid ${option.color}25` }
+                            : { background: 'transparent', border: '1px solid transparent' }
+                        }
+                      >
+                        <div
+                          className="p-1.5 rounded-lg"
+                          style={{ background: `${option.color}15` }}
+                        >
+                          <Icon className="w-3.5 h-3.5" style={{ color: option.color }} />
+                        </div>
+                        <div className="text-left flex-1">
+                          <p className="text-sm font-semibold" style={{ color: active ? option.color : 'rgba(255,255,255,0.7)' }}>
+                            {option.label}
+                          </p>
+                          <p className="text-[10px] text-white/30 font-mono mt-0.5">{option.desc}</p>
+                        </div>
+                        {active && (
+                          <div
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ background: option.color, boxShadow: `0 0 6px ${option.color}` }}
+                          />
+                        )}
+                      </motion.button>
+                    )
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Theme mode dropdown */}
+        <div ref={themeRef} className="relative">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => { closeOtherDropdowns('theme'); setThemeOpen(o => !o) }}
+            className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
+            style={{
+              background: `${currentTheme.color}10`,
+              border: `1px solid ${currentTheme.color}30`,
+              color: currentTheme.color,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              letterSpacing: '0.1em',
+            }}
+          >
+            <currentTheme.icon className="w-3.5 h-3.5" />
+            <span>{currentTheme.label}</span>
+            <motion.div animate={{ rotate: themeOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </motion.div>
+          </motion.button>
+
+          <AnimatePresence>
+            {themeOpen && (
+              <motion.div
+                variants={dropdownVariants}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                className="absolute top-full right-0 mt-2 w-56 rounded-2xl overflow-hidden pointer-events-auto z-[9999] bg-[#030712]/95 backdrop-blur-md border border-emerald-900/50 shadow-2xl"
+              >
+                <div className="p-2">
+                  {THEME_OPTIONS.map(option => {
+                    const Icon = option.icon
+                    const active = theme === option.value
+                    return (
+                      <motion.button
+                        key={option.value}
+                        whileHover={{ x: 3 }}
+                        onMouseDown={() => { setTheme(option.value); setThemeOpen(false) }}
+                        className="w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-150"
+                        style={
+                          active
+                            ? { background: `${option.color}12`, border: `1px solid ${option.color}25` }
+                            : { background: 'transparent', border: '1px solid transparent' }
+                        }
+                      >
+                        <div
+                          className="p-1.5 rounded-lg"
+                          style={{ background: `${option.color}15` }}
+                        >
+                          <Icon className="w-3.5 h-3.5" style={{ color: option.color }} />
+                        </div>
+                        <div className="text-left flex-1">
+                          <p className="text-sm font-semibold" style={{ color: active ? option.color : 'rgba(255,255,255,0.7)' }}>
+                            {option.label}
+                          </p>
+                          <p className="text-[10px] text-white/30 font-mono mt-0.5">{option.desc}</p>
+                        </div>
+                        {active && (
+                          <div
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ background: option.color, boxShadow: `0 0 6px ${option.color}` }}
+                          />
+                        )}
+                      </motion.button>
+                    )
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
         {/* Autonomy mode dropdown */}
         <div ref={autonomyRef} className="relative">
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
-            onClick={() => setAutonomyOpen(o => !o)}
+            onClick={() => { closeOtherDropdowns('autonomy'); setAutonomyOpen(o => !o) }}
             className="flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
             style={{
               background: `${currentAutonomy.color}10`,
@@ -316,13 +559,7 @@ export default function TopNavigation({
                 initial="hidden"
                 animate="visible"
                 exit="exit"
-                className="absolute top-full right-0 mt-2 w-64 rounded-2xl overflow-hidden z-50"
-                style={{
-                  background: 'rgba(6,9,20,0.97)',
-                  border: '1px solid rgba(255,255,255,0.08)',
-                  backdropFilter: 'blur(24px)',
-                  boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
-                }}
+                className="absolute top-full right-0 mt-2 w-64 rounded-2xl overflow-hidden pointer-events-auto z-[9999] bg-[#030712]/95 backdrop-blur-md border border-emerald-900/50 shadow-2xl"
               >
                 {autonomyMode === 'god' && (
                   <div
@@ -341,7 +578,7 @@ export default function TopNavigation({
                       <motion.button
                         key={option.value}
                         whileHover={{ x: 3 }}
-                        onClick={() => { setAutonomyMode(option.value); setAutonomyOpen(false) }}
+                        onMouseDown={() => { setAutonomyMode(option.value); setAutonomyOpen(false) }}
                         className="w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-150"
                         style={
                           active

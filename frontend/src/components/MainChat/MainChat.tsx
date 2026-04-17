@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Mic, MicOff, Sparkles, User, Copy, Check, Volume2, VolumeX } from 'lucide-react'
+import { Send, Mic, MicOff, Sparkles, User, Copy, Check, Volume2, VolumeX, Plus, File, ExternalLink, Trash2, Edit } from 'lucide-react'
 import { useAutonomy } from '../../context/AutonomyContext'
 
-// Global state for selected model
-let globalSelectedModel: string | null = null
+// Import global model state from TopNavigation
+import { getGlobalSelectedModel } from '../Layout/TopNavigation'
+
+// Backwards compatibility - use the global from TopNavigation
+const globalSelectedModel = () => getGlobalSelectedModel()
 
 // SpeechRecognition types
 interface SpeechRecognitionEvent extends Event {
@@ -43,6 +46,8 @@ interface Message {
   type: 'user' | 'assistant'
   content: string
   timestamp: Date
+  sessionId?: string
+  hasBeenSpoken?: boolean
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -62,6 +67,112 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
     </motion.button>
+  )
+}
+
+function FileOperation({ content }: { content: string }) {
+  // Parse file operation messages
+  const parseFileOperation = (text: string) => {
+    // Match patterns like:
+    // ✅ Created file: src/components/Login.tsx
+    // ✅ Modified file: src/components/Login.tsx (operation: append)
+    // ✅ Deleted file: src/components/Login.tsx
+    // ❌ Failed to create file: ...
+    
+    const createdMatch = text.match(/✅ Created file:\s*(.+)/)
+    const modifiedMatch = text.match(/✅ Modified file:\s*(.+)/)
+    const deletedMatch = text.match(/✅ Deleted file:\s*(.+)/)
+    const failedMatch = text.match(/❌ (Failed to|Error).+/)
+    
+    if (createdMatch) {
+      return { type: 'created', filepath: createdMatch[1].trim() }
+    } else if (modifiedMatch) {
+      return { type: 'modified', filepath: modifiedMatch[1].trim() }
+    } else if (deletedMatch) {
+      return { type: 'deleted', filepath: deletedMatch[1].trim() }
+    } else if (failedMatch) {
+      return { type: 'error' }
+    }
+    return null
+  }
+
+  const operation = parseFileOperation(content)
+  
+  if (!operation || operation.type === 'error') {
+    return null
+  }
+
+  const openInVSCode = async (filepath: string) => {
+    try {
+      await fetch('http://localhost:8000/api/vscode/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filepath, reuse_window: true })
+      })
+    } catch (error) {
+      console.error('Failed to open file in VS Code:', error)
+    }
+  }
+
+  const getIcon = () => {
+    switch (operation.type) {
+      case 'created': return <File className="w-4 h-4 text-emerald-400" />
+      case 'modified': return <Edit className="w-4 h-4 text-blue-400" />
+      case 'deleted': return <Trash2 className="w-4 h-4 text-red-400" />
+      default: return <File className="w-4 h-4" />
+    }
+  }
+
+  const getColor = () => {
+    switch (operation.type) {
+      case 'created': return 'rgba(52, 211, 153, 0.2)'
+      case 'modified': return 'rgba(59, 130, 246, 0.2)'
+      case 'deleted': return 'rgba(239, 68, 68, 0.2)'
+      default: return 'rgba(255, 255, 255, 0.1)'
+    }
+  }
+
+  const getBorderColor = () => {
+    switch (operation.type) {
+      case 'created': return 'rgba(52, 211, 153, 0.3)'
+      case 'modified': return 'rgba(59, 130, 246, 0.3)'
+      case 'deleted': return 'rgba(239, 68, 68, 0.3)'
+      default: return 'rgba(255, 255, 255, 0.2)'
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-3 p-3 rounded-xl flex items-center justify-between gap-3"
+      style={{
+        background: getColor(),
+        border: `1px solid ${getBorderColor()}`,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        {getIcon()}
+        <span className="text-sm text-white/90" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+          {operation.filepath}
+        </span>
+      </div>
+      {operation.type !== 'deleted' && operation.filepath && (
+        <motion.button
+          onClick={() => openInVSCode(operation.filepath)}
+          whileTap={{ scale: 0.95 }}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-white/80 hover:text-white transition-colors"
+          style={{
+            background: 'rgba(255,255,255,0.1)',
+            border: '1px solid rgba(255,255,255,0.2)',
+          }}
+          title="Open in VS Code"
+        >
+          <ExternalLink className="w-3 h-3" />
+          <span>Open</span>
+        </motion.button>
+      )}
+    </motion.div>
   )
 }
 
@@ -111,6 +222,8 @@ function MessageBubble({ message, index }: { message: Message; index: number }) 
           }
         >
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          {/* File Operation Display */}
+          {!isUser && <FileOperation content={message.content} />}
         </div>
 
         {/* Timestamp + copy */}
@@ -192,31 +305,28 @@ export default function MainChat() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const lockedVoiceRef = useRef<SpeechSynthesisVoice | null>(null)
-  const lastSpokenMessageIdRef = useRef<string | null>(null)
+  // Track which message IDs have been spoken to prevent ghost voice on re-mount
+  const spokenMessageIdsRef = useRef<Set<string>>(new Set())
 
-  // Load chat history on mount
-  useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        const res = await fetch('http://localhost:8000/api/chat/history')
-        if (res.ok) {
-          const data = await res.json()
-          if (data.messages && Array.isArray(data.messages)) {
-            const historyMessages: Message[] = data.messages.map((msg: any) => ({
-              id: msg.id || Date.now().toString(),
-              type: msg.type as 'user' | 'assistant',
-              content: msg.content,
-              timestamp: new Date(msg.timestamp || Date.now()),
-            }))
-            setMessages(historyMessages)
-          }
-        }
-      } catch {
-        // Silent fail - app works without history
-      }
-    }
-    loadHistory()
-  }, [])
+  // Simple session ID for backend tracking
+  const [sessionId, setSessionId] = useState('default')
+
+  // Display all messages
+  const displayedMessages = messages
+
+  // Start a new chat session
+  const startNewSession = useCallback(() => {
+    // Save current session to MongoDB
+    fetch('http://localhost:8000/api/chat/session/end', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    }).catch(err => console.error('[New Chat] Failed to save session:', err))
+
+    // Clear ALL messages for a fresh start
+    setMessages([])
+    spokenMessageIdsRef.current.clear()
+  }, [sessionId])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -230,6 +340,8 @@ export default function MainChat() {
       type: 'user',
       content: inputValue.trim(),
       timestamp: new Date(),
+      sessionId: sessionId,
+      hasBeenSpoken: true, // User messages don't trigger TTS
     }
     setMessages(prev => [...prev, userMsg])
     setInputValue('')
@@ -247,28 +359,43 @@ export default function MainChat() {
       const res = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
+        body: JSON.stringify({
+          message: userMsg.content,
+          mode,
+          model_id: globalSelectedModel(),
+          session_id: sessionId,
+        }),
       })
-      
+
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+        const errorText = await res.text()
+        console.error(`[Chat] HTTP ${res.status} Error:`, errorText)
+        throw new Error(`HTTP ${res.status}: ${res.statusText} - ${errorText.slice(0, 200)}`)
       }
-      
+
       const data = await res.json()
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
         content: data.response,
         timestamp: new Date(),
+        sessionId: sessionId,
+        hasBeenSpoken: false, // Will trigger TTS
       }
       setMessages(prev => [...prev, assistantMsg])
-      // TTS is handled by useEffect above to prevent double-firing
-    } catch {
+    } catch (err) {
+      console.error('[Chat] Error:', err)
+      let errorMsg = '⚠️ Unable to reach Krystal Engine. Is the backend running on port 8000?'
+      if (err instanceof Error) {
+        errorMsg = `⚠️ ${err.message}`
+      }
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: '⚠️ Unable to reach Krystal Engine. Is the backend running on port 8000?',
+        content: errorMsg,
         timestamp: new Date(),
+        sessionId: sessionId,
+        hasBeenSpoken: false,
       }])
     } finally {
       setIsLoading(false)
@@ -347,34 +474,56 @@ export default function MainChat() {
     }
   }, [selectAndLockVoice])
 
-  // Text-to-speech effect - only speaks when new assistant message arrives
-  useEffect(() => {
-    if (!ttsEnabled || !('speechSynthesis' in window)) return
-    
-    // Find the last assistant message
-    const lastAssistantMessage = [...messages].reverse().find(m => m.type === 'assistant')
-    if (!lastAssistantMessage) return
-    
-    // Prevent double-firing: only speak if we haven't spoken this message ID
-    if (lastAssistantMessage.id === lastSpokenMessageIdRef.current) return
-    lastSpokenMessageIdRef.current = lastAssistantMessage.id
-    
-    // Cancel any ongoing speech before speaking
-    window.speechSynthesis.cancel()
-    
-    const utterance = new SpeechSynthesisUtterance(lastAssistantMessage.content)
-    utterance.rate = 1
-    utterance.pitch = 1
-    utterance.volume = 1
-    
-    // Use locked voice
-    const voice = selectAndLockVoice()
-    if (voice) {
-      utterance.voice = voice
-    }
-    
-    window.speechSynthesis.speak(utterance)
-  }, [messages, ttsEnabled, selectAndLockVoice])
+  // Text-to-speech effect - DISABLED (backend uses edge-tts for voice output)
+  // This frontend TTS was causing double voice output
+  // useEffect(() => {
+  //   if (!ttsEnabled || !('speechSynthesis' in window)) return
+  //   if (isInitialMountRef.current) return // Don't speak during initial mount
+  //   if (isSpeakingRef.current) return // Prevent concurrent speech attempts
+
+  //   // Find the last assistant message from current session that hasn't been spoken
+  //   const lastAssistantMessage = [...messages]
+  //     .reverse()
+  //     .find(m => m.type === 'assistant' && m.sessionId === sessionId && !m.hasBeenSpoken && !spokenMessageIdsRef.current.has(m.id))
+
+  //   if (!lastAssistantMessage) return
+
+  //   // Mark as spoken immediately to prevent double-firing
+  //   spokenMessageIdsRef.current.add(lastAssistantMessage.id)
+  //   lastAssistantMessage.hasBeenSpoken = true
+
+  //   // Cancel any ongoing speech before speaking
+  //   window.speechSynthesis.cancel()
+
+  //   // Sanitize text to remove emojis, markdown, and URLs before TTS
+  //   const sanitizedText = sanitizeForTTS(lastAssistantMessage.content)
+  //   if (!sanitizedText) return
+
+  //   // Set speaking lock
+  //   isSpeakingRef.current = true
+
+  //   const utterance = new SpeechSynthesisUtterance(sanitizedText)
+  //   utterance.rate = 1
+  //   utterance.pitch = 1
+  //   utterance.volume = 1
+
+  //   // Use locked voice
+  //   const voice = selectAndLockVoice()
+  //   if (voice) {
+  //     utterance.voice = voice
+  //   }
+
+  //   // Reset speaking lock when speech ends
+  //   utterance.onend = () => {
+  //     isSpeakingRef.current = false
+  //   }
+
+  //   utterance.onerror = () => {
+  //     isSpeakingRef.current = false
+  //   }
+
+  //   window.speechSynthesis.speak(utterance)
+  // }, [messages, ttsEnabled, selectAndLockVoice, sessionId])
 
   // Speech recognition setup
   useEffect(() => {
@@ -434,6 +583,8 @@ export default function MainChat() {
       type: 'user',
       content: text.trim(),
       timestamp: new Date(),
+      sessionId: sessionId,
+      hasBeenSpoken: true,
     }
     setMessages(prev => [...prev, userMsg])
     setInputValue('')
@@ -450,28 +601,43 @@ export default function MainChat() {
       const res = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMsg.content, mode, model_id: globalSelectedModel }),
+        body: JSON.stringify({
+          message: userMsg.content,
+          mode,
+          model_id: globalSelectedModel(),
+          session_id: sessionId,
+        }),
       })
-      
+
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+        const errorText = await res.text()
+        console.error(`[Voice Chat] HTTP ${res.status} Error:`, errorText)
+        throw new Error(`HTTP ${res.status}: ${res.statusText} - ${errorText.slice(0, 200)}`)
       }
-      
+
       const data = await res.json()
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
         content: data.response,
         timestamp: new Date(),
+        sessionId: sessionId,
+        hasBeenSpoken: false, // Will trigger TTS
       }
       setMessages(prev => [...prev, assistantMsg])
-      // TTS is handled by useEffect above to prevent double-firing
-    } catch {
+    } catch (err) {
+      console.error('[Voice Chat] Error:', err)
+      let errorMsg = '⚠️ Unable to reach Krystal Engine. Is the backend running on port 8000?'
+      if (err instanceof Error) {
+        errorMsg = `⚠️ ${err.message}`
+      }
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: '⚠️ Unable to reach Krystal Engine. Is the backend running on port 8000?',
+        content: errorMsg,
         timestamp: new Date(),
+        sessionId: sessionId,
+        hasBeenSpoken: false,
       }])
     } finally {
       setIsLoading(false)
@@ -518,6 +684,31 @@ export default function MainChat() {
           backgroundSize: '40px 40px',
         }}
       />
+
+      {/* Session Header with New Chat Button */}
+      <div
+        className="relative px-4 py-2 flex items-center justify-between"
+        style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-white/30 font-mono">Session: {sessionId.slice(-8)}</span>
+          <span className="text-xs text-emerald-400/60">● Active</span>
+        </div>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={startNewSession}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200"
+          style={{
+            background: 'rgba(139,92,246,0.15)',
+            border: '1px solid rgba(139,92,246,0.3)',
+            color: 'rgba(167,139,250,0.9)',
+          }}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          New Chat
+        </motion.button>
+      </div>
 
       {/* ── Messages ─────────────────────────────────────────────────── */}
       <div className="relative flex-1 overflow-y-auto px-4 py-6">
@@ -594,8 +785,8 @@ export default function MainChat() {
             )}
           </AnimatePresence>
 
-          {/* Messages */}
-          {messages.map((msg, i) => (
+          {/* Messages - filtered by current session */}
+          {displayedMessages.map((msg, i) => (
             <MessageBubble key={msg.id} message={msg} index={i} />
           ))}
 

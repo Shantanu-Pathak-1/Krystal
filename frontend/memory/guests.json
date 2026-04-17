@@ -1,0 +1,18 @@
+{
+    "guests": {
+        "Shantanu": {
+            "relation": "The Boss",
+            "known_facts": [
+                "Creator and Master of Krystal",
+                "1st-year BTech AIML student",
+                "Master vibe coder"
+            ]
+        },
+        "Tired": {
+            "relation": "guest",
+            "known_facts": [
+                "The user shared a personal fact and a deep emotion in this interaction.\n\nPersonal information summary: The user, who claims to be 838, is experiencing physical or mental fatigue, possibly due to emotional or psychological distress, and is using repetition as a coping mechanism."
+            ]
+        }
+    }
+}

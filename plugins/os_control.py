@@ -100,14 +100,30 @@ def _previous_track() -> str:
 
 def _open_target(target: str) -> str:
     """Open a website or application - requires exact target from LLM"""
-    # Handle specific popular sites
+    # Handle abbreviation mappings
+    abbreviation_mappings = {
+        'yt': 'youtube.com',
+        'ig': 'instagram.com',
+        'chatgpt': 'chatgpt.com',
+        'gh': 'github.com',
+        'fb': 'facebook.com',
+        'x': 'twitter.com',
+        'tw': 'twitter.com',
+        'li': 'linkedin.com',
+        'rd': 'reddit.com',
+        'sp': 'spotify.com',
+        'nf': 'netflix.com',
+        'amz': 'amazon.com',
+        'wiki': 'wikipedia.org',
+    }
+    
+    # Handle specific popular sites (full names)
     site_mappings = {
         'youtube': 'https://www.youtube.com',
         'google': 'https://www.google.com',
         'gmail': 'https://mail.google.com',
         'facebook': 'https://www.facebook.com',
         'twitter': 'https://twitter.com',
-        'x': 'https://twitter.com',
         'instagram': 'https://www.instagram.com',
         'linkedin': 'https://www.linkedin.com',
         'github': 'https://github.com',
@@ -116,10 +132,18 @@ def _open_target(target: str) -> str:
         'reddit': 'https://www.reddit.com',
         'spotify': 'https://open.spotify.com',
         'wikipedia': 'https://www.wikipedia.org',
+        'chatgpt': 'https://chatgpt.com',
     }
     
-    # Check if it's a known site
+    # Check if it's a known abbreviation first
     target_lower = target.lower()
+    if target_lower in abbreviation_mappings:
+        domain = abbreviation_mappings[target_lower]
+        url = f"https://www.{domain}" if not domain.startswith('http') else domain
+        webbrowser.open(url)
+        return f"🌐 Opened {domain}."
+    
+    # Check if it's a known site (full name)
     if target_lower in site_mappings:
         url = site_mappings[target_lower]
         webbrowser.open(url)

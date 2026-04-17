@@ -1,0 +1,69 @@
+# Krystal Medium Version Configuration
+# For mid-range PCs (4 cores CPU, 8GB RAM, 20GB SSD)
+
+version: "medium"
+display_name: "Krystal Medium"
+description: "Balanced features with local and cloud services"
+
+# Feature Flags
+features:
+  # Core Features
+  chat: true
+  file_operations: true
+  code_writer: true
+  
+  # Voice Features (Local + Cloud)
+  voice: true
+  local_whisper: true
+  cloud_whisper: true
+  text_to_speech: true
+  
+  # Memory Features
+  vector_memory: true
+  mongodb: true
+  
+  # Advanced Features (Some enabled)
+  trading: false
+  multiple_providers: true
+  project_context: true
+  social_hub: false
+  advanced_plugins: true
+  
+  # Frontend Features
+  dashboard: true
+  memory_vault: true
+  diary: true
+  trading_hub: false
+  api_keys: true
+
+# Optimization Settings
+optimizations:
+  lazy_loading: true
+  minimal_animations: false
+  cloud_services: true
+  local_models: true
+  
+# LLM Provider Settings
+llm:
+  primary_provider: "groq"
+  fallback_provider: "gemini"
+  max_tokens: 4096
+  temperature: 0.7
+
+# Voice Settings (Local + Cloud)
+voice:
+  whisper_api: true
+  local_model: true
+  tts_enabled: true
+  
+# Database Settings
+database:
+  mongodb_enabled: true
+  pinecone_enabled: true
+  local_search: false
+
+# Resource Limits
+resource_limits:
+  max_memory_mb: 4096
+  max_cpu_percent: 80
+  max_concurrent_requests: 10

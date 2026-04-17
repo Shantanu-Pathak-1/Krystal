@@ -8,6 +8,10 @@ import os
 from datetime import datetime, date
 from typing import Dict, Any, Optional
 from pathlib import Path
+import logging
+
+# Setup logger
+logger = logging.getLogger("Krystal.usage")
 
 class UsageTracker:
     """Tracks API usage across different providers."""
@@ -27,7 +31,11 @@ class UsageTracker:
             try:
                 with open(self.storage_path, 'r') as f:
                     return json.load(f)
-            except Exception:
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                logger.warning(f"[Usage Tracker] Error loading usage data: {e}")
+                pass
+            except Exception as e:
+                logger.error(f"[Usage Tracker] Unexpected error loading data: {e}")
                 pass
         
         # Return default structure
@@ -103,8 +111,10 @@ class UsageTracker:
             self.usage_data["last_updated"] = datetime.utcnow().isoformat()
             with open(self.storage_path, 'w') as f:
                 json.dump(self.usage_data, f, indent=2)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"[Usage Tracker] Permission error saving data: {e}")
         except Exception as e:
-            print(f"Failed to save usage data: {e}")
+            logger.error(f"[Usage Tracker] Failed to save usage data: {e}")
     
     def _reset_daily_counters_if_needed(self):
         """Reset daily counters if it's a new day."""

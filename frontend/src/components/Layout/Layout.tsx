@@ -38,7 +38,7 @@ export default function Layout({
         />
         
         {/* Dynamic Content Area */}
-        <div className="flex-1 h-screen overflow-hidden">
+        <div className="relative z-0 flex-1 h-screen overflow-hidden">
           {children}
         </div>
       </div>

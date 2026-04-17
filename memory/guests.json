@@ -1,0 +1,12 @@
+{
+    "guests": {
+        "Shantanu": {
+            "relation": "The Boss",
+            "known_facts": [
+                "Creator and Master of Krystal",
+                "1st-year BTech AIML student",
+                "Master vibe coder"
+            ]
+        }
+    }
+}

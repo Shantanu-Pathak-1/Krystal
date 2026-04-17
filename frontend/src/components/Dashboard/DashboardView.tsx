@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { usePerformance } from '../../context/PerformanceContext'
 import {
   Database, Clock, Cpu, HardDrive, Wifi, Shield,
   Users, Brain, Zap, Activity, Server, RefreshCw,
@@ -214,6 +215,7 @@ const containerVariants = {
 
 /* ── Main Dashboard ─────────────────────────────────────────────────────── */
 export default function DashboardView() {
+  const { pollingInterval, enableAnimations } = usePerformance()
   const [stats, setStats] = useState<SystemStats>(INITIAL_STATS)
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
@@ -236,9 +238,9 @@ export default function DashboardView() {
 
   useEffect(() => {
     fetchStats()
-    const id = setInterval(fetchStats, 3000)  // Real data every 3s
+    const id = setInterval(fetchStats, pollingInterval)
     return () => clearInterval(id)
-  }, [])
+  }, [pollingInterval])
 
   const healthColor =
     stats.system_health === 'healthy'  ? '#10b981' :
@@ -284,7 +286,7 @@ export default function DashboardView() {
               AI Control Center
             </h1>
             <p className="text-sm text-white/35 mt-1 font-mono">
-              Live metrics refreshing every 3s ·{' '}
+              Live metrics refreshing every {pollingInterval / 1000}s ·{' '}
               <span style={{ color: healthColor }}>
                 {stats.system_health.toUpperCase()}
               </span>

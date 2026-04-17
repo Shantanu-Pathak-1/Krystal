@@ -6,6 +6,10 @@ from __future__ import annotations
 
 import threading
 from typing import Any
+import logging
+
+# Setup logger
+logger = logging.getLogger("Krystal.heartbeat")
 
 _HEARTBEAT_SYSTEM = (
     "You are Krystal's background process. Is there any scheduled task or "
@@ -44,17 +48,21 @@ class Heartbeat:
     def _run(self) -> None:
         while not self._stop.wait(self._interval):
             try:
-                print("\033[90m[Heartbeat: Waking up & thinking...]\033[0m", flush=True)
+                logger.info("[Heartbeat: Waking up & thinking...]")
                 reply = self._llm.generate_response(
                     _HEARTBEAT_USER,
                     system_prompt=_HEARTBEAT_SYSTEM,
                 )
-            except Exception:  # noqa: BLE001
+            except (ConnectionError, TimeoutError) as e:
+                logger.warning(f"[Heartbeat] Network error: {e}")
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[Heartbeat] Error: {e}")
                 continue
             line = (reply or "").strip()
             if not line or line.upper() == "NONE":
-                print("\033[90m[Heartbeat: All clear. Sleeping.]\033[0m", flush=True)
+                logger.info("[Heartbeat: All clear. Sleeping.]")
                 continue
             if line.startswith(("No Groq", "All configured", "[LLM error]", "[Groq API")):
                 continue
-            print(f"\033[90m[heartbeat] {line}\033[0m", flush=True)
+            logger.info(f"[heartbeat] {line}")

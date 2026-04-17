@@ -67,6 +67,9 @@ class PluginManager:
         module_name = f"krystal_plugin_{path.stem}"
         try:
             module = self._load_module(module_name, path)
+        except (ImportError, SyntaxError, AttributeError) as exc:
+            self.load_errors.append(f"{path.name}: failed to import ({type(exc).__name__}: {exc})")
+            return
         except Exception as exc:  # noqa: BLE001 — isolate bad files
             self.load_errors.append(f"{path.name}: failed to import ({type(exc).__name__}: {exc})")
             return
@@ -159,6 +162,8 @@ class PluginManager:
         run_fn = getattr(module, "run")
         try:
             raw = run_fn(rest, **kwargs)
+        except (ValueError, TypeError, KeyError) as exc:
+            return f"[Plugin {cmd!r} error] {type(exc).__name__}: {exc}"
         except Exception as exc:  # noqa: BLE001 — must not crash the engine
             return f"[Plugin {cmd!r} error] {type(exc).__name__}: {exc}"
 
@@ -168,5 +173,7 @@ class PluginManager:
             return raw
         try:
             return str(raw)
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError) as e:
+            return f"[Plugin {cmd!r} error] run() returned a non-string value that could not be coerced."
+        except Exception as e:  # noqa: BLE001
             return f"[Plugin {cmd!r} error] run() returned a non-string value that could not be coerced."

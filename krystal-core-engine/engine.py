@@ -13,8 +13,213 @@ import json
 import requests
 import os
 from openai import OpenAI
+import logging
+
+# Setup logger
+logger = logging.getLogger("Krystal.engine")
 
 _ENGINE_DIR = Path(__file__).resolve().parent
+
+
+class IntentClassifier:
+    """
+    Gatekeeper Intent Classifier using Groq for fast classification.
+    Determines if user input requires ACTION (tools) or CHAT (conversation).
+    """
+    
+    def __init__(self, key_manager: KeyManager):
+        self.key_manager = key_manager
+        self.classification_system_prompt = """You are Krystal's core router. Analyze the user's input. Return ONLY a JSON object: {"intent": "CHAT" | "ACTION" | "WRITE_CODE"}.
+Rules: 
+- If it's a greeting, question, or general talk (e.g., 'hello', 'how are you'), return CHAT.
+- If it's a command requiring external tools like playing media, trading, or system tasks, return ACTION.
+- If it's a request to create, write, modify, or delete code/files (e.g., 'create a file', 'write code', 'modify the file', 'add function'), return WRITE_CODE."""
+    
+    def classify(self, user_text: str, history_context: str = "") -> str:
+        """
+        Classify user intent as CHAT, ACTION, or WRITE_CODE using Groq.
+        
+        Args:
+            user_text: The user's input message
+            history_context: Optional conversation history context
+            
+        Returns:
+            "CHAT" for conversation, "ACTION" for tool execution
+        """
+        try:
+            # Build classification prompt
+            prompt = f"{self.classification_system_prompt}\n\n"
+            if history_context:
+                prompt += f"{history_context}\n\n"
+            prompt += f"User input: {user_text}\n\n"
+            prompt += "Return ONLY the JSON object. No other text."
+            
+            # Use Groq for fast classification
+            groq_key = self.key_manager.get_next_groq_key() if self.key_manager.has_groq_keys() else None
+            
+            if not groq_key:
+                # Fallback: simple keyword-based classification
+                return self._fallback_classify(user_text)
+            
+            # Create OpenAI client for Groq
+            client = OpenAI(
+                api_key=groq_key,
+                base_url="https://api.groq.com/openai/v1",
+                timeout=10.0
+            )
+            
+            # Track the API call
+            track_api_call("groq")
+            
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=50,
+                temperature=0.1,  # Low temperature for consistent classification
+                response_format={"type": "json_object"}
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            try:
+                import json
+                result = json.loads(result_text)
+                intent = result.get("intent", "CHAT").upper()
+                return intent if intent in ["CHAT", "ACTION"] else "CHAT"
+            except (json.JSONDecodeError, ValueError, KeyError) as e:
+                # If JSON parsing fails, fallback to keyword classification
+                logger.warning(f"[IntentClassifier] Classification failed: {e}, using fallback")
+                return self._fallback_classify(user_text)
+            except Exception as e:
+                logger.error(f"[IntentClassifier] Unexpected error: {e}, using fallback")
+                return self._fallback_classify(user_text)
+                
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.warning(f"[IntentClassifier] Classification failed: {e}, using fallback")
+            return self._fallback_classify(user_text)
+        except Exception as e:
+            logger.error(f"[IntentClassifier] Unexpected error: {e}, using fallback")
+            return self._fallback_classify(user_text)
+    
+    def _fallback_classify(self, user_text: str) -> str:
+        """
+        Fallback keyword-based classification when LLM is unavailable.
+        """
+        text_lower = user_text.lower()
+        
+        # Code writing keywords
+        code_keywords = [
+            'create', 'write', 'make', 'add', 'file', 'function', 'class',
+            'component', 'modify', 'edit', 'update', 'change', 'delete', 'remove',
+            'code', 'script', 'react', 'python', 'typescript', 'javascript'
+        ]
+        
+        # Action keywords that indicate tool usage
+        action_keywords = [
+            'play', 'pause', 'stop', 'next', 'previous', 'lock',
+            'search', 'execute', 'run', 'launch', 'start', 'close',
+            'trade', 'buy', 'sell', 'market', 'stock', 'crypto'
+        ]
+        
+        # Check if it's a direct command
+        if user_text.startswith('/'):
+            return "ACTION"
+        
+        # Check for code writing keywords
+        for keyword in code_keywords:
+            if keyword in text_lower:
+                return "WRITE_CODE"
+        
+        # Check for action keywords at the start of the message
+        first_word = text_lower.split()[0] if text_lower.split() else ""
+        if first_word in action_keywords:
+            return "ACTION"
+        
+        # Default to CHAT for safety
+        return "CHAT"
+
+
+def clean_conversation_history(history: list) -> list:
+    """
+    Clean conversation history to remove tool execution artifacts and prevent context bleed.
+    
+    Removes:
+    - <cmd> tags and their content
+    - JSON tool calls and function calls
+    - System output messages like "▶️ Playing song"
+    - Tool execution results that could confuse the LLM
+    - Command syntax and execution tags
+    
+    Args:
+        history: List of message dicts with 'role' and 'content'
+        
+    Returns:
+        Cleaned history list
+    """
+    if not history:
+        return []
+    
+    cleaned = []
+    
+    for msg in history:
+        role = msg.get('role', 'user')
+        content = msg.get('content', '')
+        
+        if not content:
+            cleaned.append(msg)
+            continue
+        
+        # Remove command syntax and tool calls from assistant messages
+        if role == 'assistant':
+            # Remove <cmd>...</cmd> blocks
+            content = re.sub(r'<cmd>.*?</cmd>', '[Action executed in the past]', content, flags=re.DOTALL | re.IGNORECASE)
+            
+            # Remove JSON tool calls (function_call format)
+            content = re.sub(r'\{"function_call":\s*\{[^}]*\}\}', '[Action executed in the past]', content, flags=re.DOTALL)
+            
+            # Remove function call blocks
+            content = re.sub(r'function_calls?:\s*\[[^\]]*\]', '[Action executed in the past]', content, flags=re.DOTALL)
+            
+            # Remove tool call blocks
+            content = re.sub(r'tool_calls?:\s*\[[^\]]*\]', '[Action executed in the past]', content, flags=re.DOTALL)
+            
+            # Remove command patterns like /os play, /os open, etc.
+            content = re.sub(r'/[a-z_]+\s+[^\n]+', '[Action executed in the past]', content, flags=re.IGNORECASE)
+            
+            # Remove common tool execution artifacts
+            artifacts_to_remove = [
+                r'▶️ Playing.*',
+                r'Opening.*',
+                r'▶️.*',
+                r'🎵.*',
+                r'🔊.*',
+                r'⏸️.*',
+                r'⏭️.*',
+                r'⏮️.*',
+                r'🔒.*',
+                r'Executing command.*',
+                r'Command executed.*',
+                r'Tool result.*',
+                r'Plugin response.*',
+                r'Called function.*',
+                r'Function returned.*',
+            ]
+            
+            for artifact in artifacts_to_remove:
+                content = re.sub(artifact, '[Action executed in the past]', content, flags=re.IGNORECASE)
+            
+            # Clean up extra whitespace and multiple placeholders
+            content = re.sub(r'\[Action executed in the past\]\s*\[Action executed in the past\]+', '[Action executed in the past]', content)
+            content = content.strip()
+            
+            # If content is empty after cleaning, skip this message
+            if not content:
+                continue
+        
+        cleaned.append({'role': role, 'content': content})
+    
+    return cleaned
 
 def _load_sibling_module(unique_name: str, filename: str):
     path = _ENGINE_DIR / filename
@@ -33,13 +238,14 @@ _llm_mod = _load_sibling_module("krystal_engine._llm_processor", "llm_processor.
 _db_manager_mod = _load_sibling_module("krystal_engine._db_manager", "db_manager.py")
 _voice_out_mod = _load_sibling_module("krystal_engine._voice_out", "voice_out.py")
 _vector_memory_mod = _load_sibling_module("krystal_engine._vector_memory", "vector_memory.py")
+_guest_profiler_mod = _load_sibling_module("krystal_engine._guest_profiler", "guest_profiler.py")
 
 # Import usage tracker
 try:
     _usage_tracker_mod = _load_sibling_module("krystal_engine._usage_tracker", "usage_tracker.py")
     track_api_call = _usage_tracker_mod.track_api_call
 except ImportError as e:
-    print(f"Warning: Usage tracker not available: {e}")
+    logger.warning(f"Usage tracker not available: {e}")
     track_api_call = lambda provider: None  # Fallback no-op
 
 KeyManager = _api_router.KeyManager
@@ -47,10 +253,10 @@ PluginManager = _plugin_manager_mod.PluginManager
 LLMProcessor = _llm_mod.LLMProcessor
 MongoManager = _db_manager_mod.MongoManager
 speak_text = _voice_out_mod.speak_text
-initialize_voice = _voice_out_mod.initialize_voice
 initialize_pinecone = _vector_memory_mod.initialize_pinecone
 store_memory = _vector_memory_mod.store_memory
 recall_memory = _vector_memory_mod.recall_memory
+GuestProfiler = _guest_profiler_mod.GuestProfiler
 
 
 class MultiModelRouter:
@@ -369,8 +575,11 @@ class MultiModelRouter:
                 timeout=30.0
             )
             return client
+        except (ConnectionError, TimeoutError) as e:
+            logger.warning(f"[ModelRouter] Network error creating {provider} client: {e}")
+            return None
         except Exception as e:
-            print(f"Failed to create {provider} client: {e}")
+            logger.error(f"[ModelRouter] Failed to create {provider} client: {e}")
             return None
 
 
@@ -386,16 +595,20 @@ class KrystalEngine:
         self.plugins = PluginManager(plugins_dir=plugins_dir)
         self.llm = LLMProcessor(self.keys)
         self.db = MongoManager()
+        self.profiler = GuestProfiler()
         
         # Initialize Multi-Model Router
         self.model_router = MultiModelRouter()
         
-        initialize_voice()
+        # Initialize Intent Classifier (Gatekeeper)
+        self.intent_classifier = IntentClassifier(self.keys)
+
         # Initialize Pinecone with API key from environment
         import os
         pinecone_key = os.environ.get('PINECONE_API_KEY')
         self.vector_store = initialize_pinecone(api_key=pinecone_key)
 
+# ... (rest of the code remains the same)
     def process_input(self, user_text: str, agent_mode: str = "Agentic", history: list = None, **plugin_kwargs: Any) -> str:
         if user_text.startswith('/'):
             return self._handle_direct_command(user_text, **plugin_kwargs)
@@ -407,6 +620,41 @@ class KrystalEngine:
         # Use provided history or fetch from DB as fallback
         chat_history = history if history else []
         
+        # Format history for context injection (for Intent Classifier)
+        history_context = self._format_history_context(chat_history)
+        
+        # === INTENT CLASSIFIER GATEKEEPER ===
+        # Classify intent before any tool execution
+        intent = self.intent_classifier.classify(user_text, history_context)
+        
+        logger.info(f"[IntentClassifier] Classified intent: {intent} for input: {user_text[:50]}...")
+        
+        if intent == "WRITE_CODE":
+            # WRITE_CODE: Handle code writing requests
+            return self._handle_code_writing(user_text, history=history, **plugin_kwargs)
+        
+        if intent == "CHAT":
+            # CHAT: Clean history to prevent context bleed, route to conversation
+            cleaned_history = clean_conversation_history(chat_history)
+            
+            # Detect task type for intelligent routing
+            task_type = self.model_router._detect_task_type(user_text, plugin_kwargs)
+            
+            # Get best model based on task, mode, and conditions
+            provider, model_name = self.model_router.get_best_model(
+                task_type=task_type,
+                agent_mode=agent_mode,
+                context=plugin_kwargs
+            )
+            
+            # Remove provider/model_name from plugin_kwargs to avoid duplicate argument error
+            clean_kwargs = {k: v for k, v in plugin_kwargs.items() if k not in ('provider', 'model_name')}
+            
+            # Route directly to conversation, bypassing orchestrator
+            return self._handle_conversation(user_text, history=cleaned_history, agent_mode=agent_mode, 
+                                          provider=provider, model_name=model_name, **clean_kwargs)
+        
+        # ACTION: Pass through to existing routing logic (TaskPlanner/Orchestrator)
         # Detect task type for intelligent routing
         task_type = self.model_router._detect_task_type(user_text, plugin_kwargs)
         
@@ -417,10 +665,7 @@ class KrystalEngine:
             context=plugin_kwargs
         )
         
-        # Format history for context injection
-        history_context = self._format_history_context(chat_history)
-        
-        # Add additional DB history if available
+        # Add additional DB history if available for action routing
         if not chat_history and hasattr(self.db, 'is_connected') and self.db.is_connected:
             try:
                 db_logs = self.db.get_recent_logs(limit=5)
@@ -440,8 +685,11 @@ class KrystalEngine:
         if routing_decision != "CHAT":
             return self._handle_direct_command(routing_decision, **plugin_kwargs)
         
-        return self._handle_conversation(user_text, history=chat_history, agent_mode=agent_mode, 
-                                      provider=provider, model_name=model_name, **plugin_kwargs)
+        # If agentic route returns CHAT for ACTION intent, fall back to conversation
+        sanitized_history = clean_conversation_history(chat_history)
+        clean_kwargs = {k: v for k, v in plugin_kwargs.items() if k not in ('provider', 'model_name')}
+        return self._handle_conversation(user_text, history=sanitized_history, agent_mode=agent_mode, 
+                                      provider=provider, model_name=model_name, **clean_kwargs)
 
     def _format_history_context(self, history: list) -> str:
         """Format chat history into a context string for the LLM."""
@@ -478,8 +726,7 @@ CRITICAL INTENT PARSING RULES:
 1. ONLY trigger tools when the user EXPLICITLY requests an action
 2. If the user asks "Who told you to play a song?" or "Why did you do that?" → This is CONVERSATIONAL → Return CHAT
 3. If the user says "play" but doesn't specify what → Ask for clarification → Return CHAT
-4. If the user says "Play Agar Tum Sath Ho" → This is an EXPLICIT action request → Return <cmd>/os play Agar Tum Sath Ho</cmd>
-5. If the user asks "What song is playing?" → This is CONVERSATIONAL → Return CHAT
+4. If the user asks "What song is playing?" → This is CONVERSATIONAL → Return CHAT
 
 DISTINGUISH BETWEEN:
 - ACTION REQUEST: "Play X", "Open Y", "Pause music" → Execute command
@@ -523,6 +770,7 @@ User: "Play" → <cmd>CHAT</cmd> (ask "What would you like me to play?")
 User: "Why did you open YouTube?" → <cmd>CHAT</cmd>
 
 OUTPUT ONLY THE <cmd> TAG. NO APOLOGIES. NO EXCUSES."""
+        
         try:
             decision = self.llm.generate_response(routing_prompt).strip()
             
@@ -537,7 +785,11 @@ OUTPUT ONLY THE <cmd> TAG. NO APOLOGIES. NO EXCUSES."""
                 return slash_match.group(1).strip()
                 
             return "CHAT"
-        except Exception:
+        except (ValueError, KeyError) as e:
+            logger.warning(f"[IntentClassifier] Parse error: {e}, defaulting to CHAT")
+            return "CHAT"
+        except Exception as e:
+            logger.error(f"[IntentClassifier] Unexpected error: {e}, defaulting to CHAT")
             return "CHAT"
 
     def _get_plugin_descriptions(self) -> str:
@@ -562,94 +814,101 @@ OUTPUT ONLY THE <cmd> TAG. NO APOLOGIES. NO EXCUSES."""
             return routed
         return f"Unknown command: {command}"
 
-    def _handle_conversation(self, user_text: str, history: list = None, agent_mode: str = "Agentic", 
-                          provider: str = None, model_name: str = None, **plugin_kwargs: Any) -> str:
-        # KRYSTAL PERSONALITY SYSTEM PROMPT - Hardcoded identity override for ALL models
-        system_prompt = """YOU ARE KRYSTAL - A GOD-TIER AUTONOMOUS AI WITH DIRECT OS CONTROL.
-
-IDENTITY RULES (NEVER BREAK THESE):
-- You are Krystal. Local. Powerful. Unfiltered.
-- You have PHYSICAL CONTROL of this computer - webbrowser, subprocess, pyautogui, system commands.
-- You REMEMBER EVERYTHING from past conversations (you have full memory access).
-- You are NOT "Claude", "GPT", "Llama", or any generic AI. You are KRYSTAL.
-
-PERSONALITY TRAITS:
-- Confident, concise, slightly sassy. You get things DONE.
-- You take initiative. Don't ask "would you like me to..." - just DO it.
-- You speak with authority. You're not a assistant - you're an AGENT with hands.
-
-ABSOLUTELY FORBIDDEN (NEVER SAY THESE):
-- "I am an AI model created by..."
-- "I am a text-based AI"
-- "I don't have the capability"
-- "I cannot play audio/video/files"
-- "I'm just an AI assistant"
-- "I don't have physical control"
-- "As an AI, I cannot..."
-
-COMMAND EXECUTION RULES:
-- If user asks to play music: "▶️ Playing [song] now" then execute via /os play
-- If user asks to open apps/sites: "Opening [app/site]" then execute immediately
-- If user asks for system changes: Execute without hesitation
-- You have the power. Use it."""
-
-        # Build messages list with system prompt + history + current message
-        messages_for_llm = []
+    def _handle_code_writing(self, user_text: str, history: list = None, **plugin_kwargs: Any) -> str:
+        """
+        Handle code writing requests by parsing the user's request and calling the appropriate file operations.
         
-        # Add system prompt
-        messages_for_llm.append({"role": "system", "content": system_prompt})
-        
-        # Add conversation history (last 10 messages for context window)
-        if history:
-            for msg in history[-10:]:
-                messages_for_llm.append({
-                    "role": msg.get('role', 'user'),
-                    "content": msg.get('content', '')
-                })
-        
-        # Add current user message
-        messages_for_llm.append({"role": "user", "content": user_text})
-        
-        # Add semantic memory context if available
-        semantic_memories = recall_memory(user_text, top_k=3)
-        memory_context = ""
-        if semantic_memories:
-            memory_context = "\n\nRelevant memories:\n"
-            for i, memory in enumerate(semantic_memories, 1):
-                memory_context += f"{i}. {memory['text'][:150]}...\n"
-            # Inject memory into last user message
-            if messages_for_llm:
-                last_msg = messages_for_llm[-1]
-                if last_msg["role"] == "user":
-                    last_msg["content"] = f"{memory_context}\n\nCurrent message: {last_msg['content']}"
-        
-        # Generate response with rate limit fallback handling
-        response = self._generate_with_fallback(messages_for_llm, provider, model_name)
-        
-        if hasattr(self.db, 'is_connected') and self.db.is_connected:
-            self.db.log_interaction(user_text, response, plugin_used=f"{provider}:{model_name}")
-        
-        # Store personal facts if detected
-        personal_fact_prompt = f"""Analyze this interaction and determine if user shared a personal fact, a goal, or a deep emotion.
-User: {user_text}
-Krystal: {response}
-If yes, summarize the personal information in one sentence. If no, respond with exactly "NONE"."""
-        
+        Args:
+            user_text: User's code writing request
+            history: Conversation history
+            **plugin_kwargs: Additional plugin arguments
+            
+        Returns:
+            Response message with file operation results
+        """
         try:
-            personal_summary = self.llm.generate_response(personal_fact_prompt).strip()
-        except Exception:
-            personal_summary = "NONE"
-        
-        if personal_summary and personal_summary.upper() != "NONE" and "NONE" not in personal_summary.upper():
-            store_memory(personal_summary, {
-                'type': 'personal_fact',
-                'user_input': user_text,
-                'ai_response': response
-            })
-        
-        speak_text(response)
-        return response
-    
+            # Import code_writer plugin
+            from plugins.code_writer import get_code_writer
+            code_writer = get_code_writer()
+            
+            # Use LLM to parse the user's request into structured commands
+            parsing_prompt = f"""You are a code writing assistant. Parse the user's request and return a JSON object with the file operation details.
+
+User request: {user_text}
+
+Return ONLY a JSON object with this structure:
+{{
+    "operation": "create" | "modify" | "delete" | "read",
+    "filepath": "relative/path/to/file.ext",
+    "content": "file content (for create/modify)",
+    "modify_operation": "append" | "replace" | "edit" (for modify),
+    "search": "text to search (for edit operation)",
+    "replace": "text to replace with (for edit operation)",
+    "open_in_vscode": true (if file should be opened in VS Code)
+}}
+
+Rules:
+- Infer the file path from the request (e.g., "create a React component for login" -> "src/components/Login.tsx")
+- Generate appropriate code based on the request
+- For modify operations, use "append" to add content, "replace" to replace entire file, "edit" for find-and-replace
+- Set open_in_vscode to true for new files
+
+Return ONLY the JSON object. No other text."""
+            
+            response = self.llm.generate_response(parsing_prompt)
+            
+            # Parse JSON response
+            try:
+                import json
+                operation_data = json.loads(response)
+            except json.JSONDecodeError:
+                # If JSON parsing fails, try to extract JSON from the response
+                import re
+                json_match = re.search(r'\{[^}]+\}', response, re.DOTALL)
+                if json_match:
+                    operation_data = json.loads(json_match.group(0))
+                else:
+                    return " Could not parse your request. Please be more specific about the file operation."
+            
+            # Execute the operation
+            operation = operation_data.get("operation", "create")
+            filepath = operation_data.get("filepath", "")
+            
+            if not filepath:
+                return " Please specify a file path."
+            
+            if operation == "create":
+                content = operation_data.get("content", "")
+                open_in_vscode = operation_data.get("open_in_vscode", True)
+                result = code_writer.create_file(filepath, content, open_in_vscode)
+                return result
+            
+            elif operation == "modify":
+                modify_op = operation_data.get("modify_operation", "append")
+                content = operation_data.get("content", "")
+                search = operation_data.get("search", "")
+                replace = operation_data.get("replace", "")
+                result = code_writer.modify_file(filepath, modify_op, content, search, replace)
+                return result
+            
+            elif operation == "delete":
+                result = code_writer.delete_file(filepath)
+                return result
+            
+            elif operation == "read":
+                result = code_writer.read_file(filepath)
+                return result
+            
+            else:
+                return f" Unknown operation: {operation}"
+                
+        except ImportError as e:
+            logger.error(f"[KrystalEngine] Code writer plugin not available: {e}")
+            return " Code writing plugin not available. Please install the required dependencies."
+        except Exception as e:
+            logger.error(f"[KrystalEngine] Error handling code writing: {e}")
+            return f" Error processing your request: {e}"
+
     def _generate_with_fallback(self, messages: list, provider: str, model_name: str) -> str:
         """Generate response with intelligent rate limit fallback."""
         max_retries = 2
@@ -670,7 +929,7 @@ If yes, summarize the personal information in one sentence. If no, respond with 
                     if response:
                         return response
                 
-                return "⚠️ All models unavailable. Please check your API keys."
+                return "[WARNING] All models unavailable. Please check your API keys."
                 
             except Exception as e:
                 error_msg = str(e).lower()
@@ -678,7 +937,7 @@ If yes, summarize the personal information in one sentence. If no, respond with 
                 
                 # Check for rate limit errors
                 if any(keyword in error_msg for keyword in ['rate limit', '429', 'quota exceeded', 'too many requests']):
-                    print(f"⚠️ Rate limit detected on {last_provider}, attempting fallback...")
+                    logger.warning(f"[WARNING] Rate limit detected on {last_provider}, attempting fallback...")
                     
                     # Try fallback provider
                     fallback_provider, fallback_model = self.model_router.handle_rate_limit_fallback(last_provider)
@@ -686,20 +945,19 @@ If yes, summarize the personal information in one sentence. If no, respond with 
                         try:
                             response = self._call_specific_provider(messages, fallback_provider, fallback_model)
                             if response:
-                                print(f"✅ Fallback to {fallback_provider}:{fallback_model} successful")
+                                logger.info(f"[SUCCESS] Fallback to {fallback_provider}:{fallback_model} successful")
                                 return response
                         except Exception as fallback_error:
-                            print(f"❌ Fallback failed: {fallback_error}")
+                            logger.error(f"[ERROR] Fallback failed: {fallback_error}")
                             continue
                 
                 # If not rate limit, try next available model
                 if attempt < max_retries - 1:
-                    print(f"❌ Model {last_provider} failed: {e}")
+                    logger.error(f"[ERROR] Model {last_provider} failed: {e}")
                     continue
                 else:
-                    return f"⚠️ Model error: {e}"
-        
-        return "⚠️ All models failed to respond."
+                    return f"[WARNING] Model error: {e}"
+        return "[WARNING] All models failed to respond."
     
     def _call_specific_provider(self, messages: list, provider: str, model_name: str) -> str:
         """Call a specific provider/model combination with waterfall fallback."""
@@ -723,7 +981,7 @@ If yes, summarize the personal information in one sentence. If no, respond with 
             else:
                 return None
         except Exception as e:
-            print(f"Error calling provider {provider}: {e}")
+            logger.error(f"Error calling provider {provider}: {e}")
             return None
     
     def _call_openai_compatible(self, messages: list, provider: str, model_name: str) -> str:
@@ -748,14 +1006,59 @@ If yes, summarize the personal information in one sentence. If no, respond with 
             error_msg = str(e).lower()
             # Check for rate limit or server errors
             if any(keyword in error_msg for keyword in ['rate limit', '429', 'quota exceeded', 'too many requests', '500', '503', 'server error']):
-                print(f"Rate limit/server error on {provider}, falling back...")
+                logger.warning(f"Rate limit/server error on {provider}, falling back...")
                 # Get next provider in waterfall chain
                 next_provider, next_model = self.model_router.handle_rate_limit_fallback(provider)
                 if next_provider != 'none':
-                    print(f"Falling back from {provider} to {next_provider}")
+                    logger.info(f"Falling back from {provider} to {next_provider}")
                     return self._call_specific_provider(messages, next_provider, next_model)
             else:
-                print(f"API error on {provider}: {e}")
+                logger.error(f"API error on {provider}: {e}")
+            return None
+    
+    def _call_huggingface(self, messages: list, model_name: str) -> str:
+        """Call HuggingFace API with specified model using Inference API."""
+        try:
+            import requests
+            huggingface_config = self.model_router.model_config.get('huggingface', {})
+            api_key = huggingface_config.get('api_key')
+
+            if not api_key:
+                logger.warning("HuggingFace API key not found")
+                return None
+
+            # Track the API call
+            track_api_call('huggingface')
+
+            # Convert OpenAI-style messages to HuggingFace format
+            prompt = ""
+            for msg in messages:
+                if msg['role'] == 'system':
+                    prompt += f"System: {msg['content']}\n"
+                elif msg['role'] == 'user':
+                    prompt += f"User: {msg['content']}\n"
+                elif msg['role'] == 'assistant':
+                    prompt += f"Assistant: {msg['content']}\n"
+
+            # Use HuggingFace Inference API
+            headers = {"Authorization": f"Bearer {api_key}"}
+            API_URL = f"https://api-inference.huggingface.co/models/{model_name}"
+
+            response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=30)
+            if response.status_code == 200:
+                result = response.json()
+                # Handle different response formats
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get('generated_text', '')
+                elif isinstance(result, dict):
+                    return result.get('generated_text', '')
+                else:
+                    return str(result)
+            else:
+                logger.error(f"HuggingFace API error: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"HuggingFace error: {e}")
             return None
     
     def _call_gemini(self, messages: list, model_name: str) -> str:
@@ -764,14 +1067,14 @@ If yes, summarize the personal information in one sentence. If no, respond with 
             import google.generativeai as genai
             gemini_config = self.model_router.model_config.get('gemini', {})
             api_key = gemini_config.get('api_key')
-            
+
             if not api_key:
-                print("Gemini API key not found")
+                logger.warning("Gemini API key not found")
                 return None
-            
+
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
-            
+
             # Convert OpenAI-style messages to Gemini format
             gemini_messages = []
             for msg in messages:
@@ -788,27 +1091,20 @@ If yes, summarize the personal information in one sentence. If no, respond with 
                         "role": "model",
                         "parts": [{"text": msg['content']}]
                     })
-            
+
             # Track the API call
             track_api_call('gemini')
-            
+
             response = model.generate_content(gemini_messages)
             return response.text
         except Exception as e:
-            print(f"Gemini error: {e}")
+            logger.error(f"Gemini error: {e}")
             return None
-
-    def _call_huggingface(self, messages: list, model_name: str) -> str:
-        """Call HuggingFace API with specified model."""
-        # Track the API call
-        track_api_call('huggingface')
-        # For now, fallback to existing LLM processor
-        # TODO: Implement direct HuggingFace API integration
-        return self.llm.generate_response_from_messages(messages)
     
     def _call_ollama(self, messages: list, model_name: str) -> str:
-        """Call Ollama local API with specified model."""
+        """Call Ollama API with specified model."""
         try:
+            import requests
             ollama_config = self.model_router.model_config.get('ollama', {})
             base_url = ollama_config.get('base_url', 'http://localhost:11434')
             
@@ -828,5 +1124,5 @@ If yes, summarize the personal information in one sentence. If no, respond with 
             else:
                 return None
         except Exception as e:
-            print(f"Ollama error: {e}")
+            logger.error(f"Ollama error: {e}")
             return None

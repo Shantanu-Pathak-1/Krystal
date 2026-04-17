@@ -24,6 +24,7 @@ interface Config {
   groq_api_key: string
   anthropic_api_key: string
   log_level: string
+  production_mode: boolean
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -44,6 +45,7 @@ const DEFAULT_CONFIG: Config = {
   groq_api_key: '',
   anthropic_api_key: '',
   log_level: 'INFO',
+  production_mode: false,
 }
 
 /* ─────────────────────────────────────────────────── micro components ── */
@@ -443,7 +445,20 @@ export default function ConfigView() {
           const data = await res.json()
           if (data.config) {
             setConfig(prev => ({ ...prev, ...data.config }))
+            setHasChanges(false)
+            setSaved(true)
           }
+        }
+
+        // Load production mode from backend
+        try {
+          const pmRes = await fetch('http://localhost:8000/api/production-mode')
+          const pmData = await pmRes.json()
+          if (pmData.status === 'success') {
+            setConfig(prev => ({ ...prev, production_mode: pmData.production_mode }))
+          }
+        } catch (err) {
+          console.error('Failed to load production mode:', err)
         }
       } catch (e) {
         setLoadError('Failed to load configuration from server')
@@ -457,6 +472,15 @@ export default function ConfigView() {
     setConfig(prev => ({ ...prev, [key]: val }))
     setHasChanges(true)
     setSaved(false)
+
+    // Sync production_mode with backend
+    if (key === 'production_mode') {
+      fetch('http://localhost:8000/api/production-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ production_mode: val as boolean })
+      }).catch(console.error)
+    }
   }
 
   const toggle = (section: string) =>
@@ -926,6 +950,13 @@ export default function ConfigView() {
                       onChange={v => update('enable_webcam', v)}
                       description="Allow camera access for visual context."
                       accent="#06b6d4"
+                    />
+                    <NeonToggle
+                      label="Production Mode"
+                      value={config.production_mode || false}
+                      onChange={v => update('production_mode', v)}
+                      description="Disable mock data - requires real API keys for live trading data."
+                      accent="#f59e0b"
                     />
 
                     {/* God Mode — danger zone */}

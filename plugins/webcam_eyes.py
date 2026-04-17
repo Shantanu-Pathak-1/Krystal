@@ -6,13 +6,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import cv2
-    OPENCV_AVAILABLE = True
-except ImportError:
-    OPENCV_AVAILABLE = False
-    print("Warning: OpenCV not available. Install with: pip install opencv-python")
-
 NAME = "/webcam"
 DESCRIPTION = "Takes a picture using physical webcam and analyzes it."
 
@@ -30,7 +23,10 @@ def run(query, **kwargs):
     """
     _ = kwargs
     
-    if not OPENCV_AVAILABLE:
+    # Dynamic import: Only load OpenCV when this tool is actually called
+    try:
+        import cv2
+    except ImportError:
         return "Error: OpenCV not available. Install with: pip install opencv-python"
     
     try:

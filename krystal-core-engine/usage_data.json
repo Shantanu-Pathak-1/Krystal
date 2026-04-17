@@ -1,0 +1,65 @@
+{
+  "providers": {
+    "groq": {
+      "total_requests": 60,
+      "daily_requests": 60,
+      "daily_limit": 2000,
+      "last_reset": "2026-04-16"
+    },
+    "sambanova": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 1000,
+      "last_reset": "2026-04-16"
+    },
+    "together": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 1500,
+      "last_reset": "2026-04-16"
+    },
+    "openrouter": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 3000,
+      "last_reset": "2026-04-16"
+    },
+    "fireworks": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 2500,
+      "last_reset": "2026-04-16"
+    },
+    "gemini": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 1500,
+      "last_reset": "2026-04-16"
+    },
+    "huggingface": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 1000,
+      "last_reset": "2026-04-16"
+    },
+    "ollama": {
+      "total_requests": 0,
+      "daily_requests": 0,
+      "daily_limit": 999999,
+      "last_reset": "2026-04-16"
+    }
+  },
+  "storage": {
+    "mongodb": {
+      "database_size_mb": 0,
+      "document_count": 0,
+      "last_updated": "2026-04-16T03:22:49.608795"
+    },
+    "pinecone": {
+      "vector_count": 0,
+      "index_fullness_percent": 0,
+      "last_updated": "2026-04-16T03:22:49.608801"
+    }
+  },
+  "last_updated": "2026-04-16T14:48:59.104364"
+}

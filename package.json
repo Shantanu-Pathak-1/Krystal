@@ -1,4 +1,9 @@
 {
+  "name": "krystal-ai-root",
+  "version": "1.0.0",
+  "scripts": {
+    "dev:electron": "npm --prefix frontend run dev:electron"
+  },
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.1",
     "@react-three/drei": "^10.7.7",

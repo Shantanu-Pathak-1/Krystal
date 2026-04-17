@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Initializing Krystal AI</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #05080f;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            text-align: center;
+            width: 80%;
+            max-width: 400px;
+        }
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            letter-spacing: 4px;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #a78bfa 0%, #22d3ee 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-transform: uppercase;
+        }
+        .loader {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+        .loader-bar {
+            position: absolute;
+            height: 100%;
+            width: 30%;
+            background: #22d3ee;
+            box-shadow: 0 0 10px #22d3ee;
+            animation: loading 2s infinite ease-in-out;
+        }
+        @keyframes loading {
+            0% { left: -30%; }
+            100% { left: 100%; }
+        }
+        .status-list {
+            text-align: left;
+            margin-top: 20px;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 12px;
+            background: #444;
+        }
+        .status-dot.online { background: #10b981; box-shadow: 0 0 8px #10b981; }
+        .status-dot.pending { background: #f59e0b; animation: pulse 1s infinite; }
+        .status-dot.error { background: #ef4444; }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+        .log {
+            font-family: monospace;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.3);
+            margin-top: 40px;
+            height: 40px;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">Krystal AI</div>
+        <div class="loader">
+            <div class="loader-bar"></div>
+        </div>
+        <div class="status-list">
+            <div class="status-item">
+                <div id="frontend-dot" class="status-dot pending"></div>
+                Frontend Service (Port 3000)
+            </div>
+            <div class="status-item">
+                <div id="backend-dot" class="status-dot pending"></div>
+                Backend API (Port 8000)
+            </div>
+            <div class="status-item">
+                <div id="voice-dot" class="status-dot pending"></div>
+                Voice Engine System
+            </div>
+        </div>
+        <div id="log-display" class="log">Initial boot sequence started...</div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+
+        ipcRenderer.on('status-update', (event, data) => {
+            const dot = document.getElementById(`${data.service}-dot`);
+            if (dot) {
+                dot.className = `status-dot ${data.status}`;
+            }
+            if (data.log) {
+                document.getElementById('log-display').innerText = data.log;
+            }
+        });
+    </script>
+</body>
+</html>
